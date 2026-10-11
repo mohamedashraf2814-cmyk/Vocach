@@ -47,7 +47,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setBusinessName(s.businessName);
       setBootError(null);
     } catch (e) {
-      setBootError((e as Error).message);
+      // 404 أو استجابة غير JSON تعني أن الواجهة منشورة بدون خادم النظام
+      const err = e as Error & { status?: number };
+      setBootError(err.status === 404 || err.message === 'استجابة غير متوقعة من الخادم'
+        ? 'خادم النظام غير متاح على هذا الرابط. هذا النشر يحتوي على الواجهة فقط، ويجب تشغيل خادم النظام (npm start) لتسجيل الدخول وحفظ البيانات.'
+        : err.message);
     } finally {
       setReady(true);
     }
