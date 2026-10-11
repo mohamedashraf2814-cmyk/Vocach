@@ -5,6 +5,7 @@ import {
   Trash2, History, Bell, AlertTriangle, AlertOctagon, Info, Settings as SettingsIcon, Save,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { CAN_DOWNLOAD, CAN_PRINT } from '../lib/env';
 import { useAuth } from '../lib/auth';
 import { useApi, useDebounced, useSubmit } from '../lib/hooks';
 import { fmtDate, fmtDateTime, fmtMoney, fmtNum, monthStartIso, todayIso } from '../lib/format';
@@ -75,8 +76,8 @@ export function ReportPage() {
   return (
     <Page title={def.title} icon={<def.icon />} tone={def.tone} breadcrumb={<><Link to="/reports">التقارير</Link><span>/</span><span>{def.title}</span></>}
       actions={state.data && state.data.rows.length > 0 && <>
-        <Button icon={<Download />} onClick={() => exportCsv(def.key, state.data!)}>تصدير Excel (CSV)</Button>
-        <Button icon={<Printer />} onClick={() => window.print()}>طباعة / PDF</Button>
+        {CAN_DOWNLOAD && <Button icon={<Download />} onClick={() => exportCsv(def.key, state.data!)}>تصدير Excel (CSV)</Button>}
+        {CAN_PRINT && <Button icon={<Printer />} onClick={() => window.print()}>طباعة / PDF</Button>}
       </>}>
       <div className="print-only mb-2">{!def.noDates && <span>الفترة: {fmtDate(f.from)} — {fmtDate(f.to)}</span>}</div>
       <div className="card mb-2 no-print">

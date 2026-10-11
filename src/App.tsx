@@ -1,7 +1,9 @@
-import type { ReactNode } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { useState, type ReactNode } from 'react';
+import { BrowserRouter, HashRouter, Route, Routes } from 'react-router-dom';
+import { FlaskConical } from 'lucide-react';
+import { IS_DEMO } from './lib/env';
 import { AuthProvider } from './lib/auth';
-import { ToastProvider } from './components/ui';
+import { Button, ConfirmDialog, ToastProvider } from './components/ui';
 import { NotFoundPage, NotificationsProvider, RequireAuth, RequirePerm } from './components/Layout';
 import { LoginPage, SetupPage } from './pages/Login';
 import { HomePage } from './pages/Home';
@@ -14,15 +16,41 @@ import {
 } from './pages/Operations';
 import { AuditPage, NotificationsPage, ReportPage, ReportsPage, SettingsPage, UsersPage } from './pages/Admin';
 
+// نسخة العرض تستخدم التوجيه بالـ hash لأنها تُفتح من رابط واحد
+const Router = IS_DEMO ? HashRouter : BrowserRouter;
+
+function DemoBanner() {
+  const [open, setOpen] = useState(false);
+  if (!IS_DEMO) return null;
+  const persistent = (window as unknown as { __demoPersistent?: () => boolean }).__demoPersistent?.() ?? true;
+  return (
+    <div className="demo-banner no-print" role="note">
+      <FlaskConical aria-hidden />
+      <span>{persistent ? 'نسخة عرض تجريبية: كل ما تسجله يُحفظ في هذا المتصفح فقط ولا يُرسل لأي خادم.' : 'نسخة عرض تجريبية: متصفحك يمنع التخزين، لذلك ستُفقد البيانات عند إغلاق الصفحة.'}</span>
+      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>مسح بيانات العرض</Button>
+      <ConfirmDialog open={open} title="مسح بيانات العرض" danger confirmLabel="مسح كل البيانات" onClose={() => setOpen(false)}
+        message="سيتم حذف كل البيانات المسجلة في نسخة العرض على هذا المتصفح، بما فيها حساب المدير، والبدء من جديد."
+        onConfirm={async () => {
+          const { clearAll } = await import('./demo/storage.js');
+          await clearAll();
+          location.hash = '';
+          location.reload();
+          return false;
+        }} />
+    </div>
+  );
+}
+
 // مسار محمي: يتطلب تسجيل الدخول وأي صلاحية من القائمة
 const P = (perms: string[], el: ReactNode) => <RequireAuth><RequirePerm perms={perms}>{el}</RequirePerm></RequireAuth>;
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <Router>
       <AuthProvider>
         <ToastProvider>
           <NotificationsProvider>
+            <DemoBanner />
             <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route path="/setup" element={<SetupPage />} />
@@ -66,6 +94,6 @@ export default function App() {
           </NotificationsProvider>
         </ToastProvider>
       </AuthProvider>
-    </BrowserRouter>
+    </Router>
   );
 }

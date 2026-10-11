@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Users, Plus, Pencil, Search, Banknote, Trash2, CalendarCheck, CheckCircle2, XCircle, Info } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { CAN_PRINT } from '../lib/env';
 import { useApi, useDebounced, useSubmit } from '../lib/hooks';
 import { fmtDate, fmtDateTime, fmtMoney, fmtNum, round2, todayIso } from '../lib/format';
 import { DIRECTIONS, PAYMENT_METHODS, SALE_STATUS, SETTLEMENT_STATUS, TRANSFER_STATUS } from '../lib/constants';
@@ -381,7 +382,7 @@ export function SettlementDetailPage() {
   return (
     <Page title="تفاصيل التقفيل" icon={<CalendarCheck />} tone="emerald" breadcrumb={<><Link to="/settlements">التقفيل اليومي</Link><span>/</span><span>تفاصيل</span></>}
       actions={state.data && <>
-        <Button onClick={() => window.print()}>طباعة</Button>
+        {CAN_PRINT && <Button onClick={() => window.print()}>طباعة</Button>}
         {can('settlements.review') && state.data.status === 'pending' && <>
           <Button variant="success" icon={<CheckCircle2 />} onClick={() => setDecision('approved')}>اعتماد</Button>
           <Button variant="danger-outline" icon={<XCircle />} onClick={() => setDecision('rejected')}>رفض</Button>

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeftRight, Plus, Search, CheckCircle2, Wallet, Printer, Ban, Check, Landmark } from 'lucide-react';
-import { api } from '../lib/api';
+import { api, fileUrl } from '../lib/api';
+import { CAN_PRINT } from '../lib/env';
 import { useAuth } from '../lib/auth';
 import { useApi, useDebounced, useDraft, useSubmit } from '../lib/hooks';
 import { fmtDateTime, fmtMoney, fmtNum, round2 } from '../lib/format';
@@ -481,7 +482,7 @@ export function TransferDetailPage() {
   const [action, setAction] = useState<'cancel' | 'complete' | null>(null);
   return (
     <Page title="تفاصيل العملية" icon={<ArrowLeftRight />} tone="indigo" breadcrumb={<><Link to="/transfers">التحويلات</Link><span>/</span><span>تفاصيل</span></>}
-      actions={state.data && <Button icon={<Printer />} onClick={() => window.print()}>طباعة</Button>}>
+      actions={state.data && CAN_PRINT && <Button icon={<Printer />} onClick={() => window.print()}>طباعة</Button>}>
       <AsyncView state={state}>
         {(t) => (
           <div className="stack">
@@ -506,7 +507,7 @@ export function TransferDetailPage() {
               {t.notes && <div className="mt-2"><div className="small muted bold">ملاحظات</div><div style={{ whiteSpace: 'pre-wrap' }}>{t.notes}</div></div>}
             </Card>
             {t.receipt && /\.(png|jpe?g|webp|gif)$/i.test(t.receipt) && (
-              <Card title="معاينة الإيصال"><img src={`/api/files/${t.receipt}`} alt="إيصال العملية" style={{ maxWidth: '100%', maxHeight: 520, borderRadius: 8 }} /></Card>
+              <Card title="معاينة الإيصال"><img src={fileUrl(t.receipt) || undefined} alt="إيصال العملية" style={{ maxWidth: '100%', maxHeight: 520, borderRadius: 8 }} /></Card>
             )}
             <ConfirmDialog
               open={action !== null}

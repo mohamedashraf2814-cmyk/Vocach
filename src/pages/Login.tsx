@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Lock, User, Store, ArrowLeftRight, ShoppingCart, Package, BarChart3, LogIn } from 'lucide-react';
 import { useAuth } from '../lib/auth';
+import { IS_DEMO } from '../lib/env';
 import { Alert, Button, Field, Input, Loading, ErrorState } from '../components/ui';
 import { SessionExpiredBanner } from '../components/Layout';
 
@@ -21,7 +22,7 @@ function AuthLayout({ children }: { children: React.ReactNode }) {
             <li><BarChart3 />تقارير وتقفيل يومي</li>
           </ul>
         </div>
-        <small style={{ opacity: .7 }}>جميع البيانات محفوظة على خادمك الخاص</small>
+        <small style={{ opacity: .7 }}>{IS_DEMO ? 'نسخة عرض: البيانات محفوظة في هذا المتصفح فقط' : 'جميع البيانات محفوظة على خادمك الخاص'}</small>
       </aside>
       <main className="auth-main">{children}</main>
     </div>

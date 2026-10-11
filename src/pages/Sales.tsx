@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ShoppingCart, Search, Plus, Minus, Trash2, CheckCircle2, Printer, Receipt, Package, Ban, ImageOff } from 'lucide-react';
 import { api, fileUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { CAN_PRINT } from '../lib/env';
 import { useApi, useDebounced, useSubmit } from '../lib/hooks';
 import { fmtDateTime, fmtMoney, fmtNum, round2 } from '../lib/format';
 import { PAYMENT_METHODS, SALE_STATUS } from '../lib/constants';
@@ -114,7 +115,7 @@ export function POSPage() {
             </div>
             <div className="row mt-2" style={{ justifyContent: 'center' }}>
               <Button variant="primary" size="lg" icon={<Plus />} onClick={newSale} autoFocus>بيع جديد</Button>
-              <Link className="btn btn-secondary btn-lg" to={`/sales/${result.id}?print=1`}><Printer />طباعة الفاتورة</Link>
+              <Link className="btn btn-secondary btn-lg" to={CAN_PRINT ? `/sales/${result.id}?print=1` : `/sales/${result.id}`}>{CAN_PRINT ? <><Printer />طباعة الفاتورة</> : <><Receipt />عرض الفاتورة</>}</Link>
             </div>
           </div>
         </div>
@@ -269,14 +270,15 @@ export function SaleDetailPage() {
   const state = useApi(() => api.get<Sale>(`/sales/${id}`), [id]);
   const settings = useApi(() => api.get<Settings>('/settings'), []);
   const [cancel, setCancel] = useState(false);
-  const autoPrint = useMemo(() => new URLSearchParams(window.location.search).get('print') === '1', []);
+  const [sp] = useSearchParams();
+  const autoPrint = CAN_PRINT && sp.get('print') === '1';
   useEffect(() => {
     if (autoPrint && state.data && settings.data) { const t = setTimeout(() => window.print(), 300); return () => clearTimeout(t); }
   }, [autoPrint, state.data, settings.data]);
   return (
     <Page title="تفاصيل الفاتورة" icon={<Receipt />} tone="cyan" breadcrumb={<><Link to="/sales">المبيعات</Link><span>/</span><span>فاتورة</span></>}
       actions={state.data && <>
-        <Button variant="primary" icon={<Printer />} onClick={() => window.print()}>طباعة الفاتورة</Button>
+        {CAN_PRINT && <Button variant="primary" icon={<Printer />} onClick={() => window.print()}>طباعة الفاتورة</Button>}
         {can('sales.cancel') && state.data.status === 'completed' && <Button variant="danger-outline" icon={<Ban />} onClick={() => setCancel(true)}>إلغاء الفاتورة</Button>}
       </>}>
       <AsyncView state={state}>

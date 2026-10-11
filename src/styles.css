@@ -429,3 +429,6 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .summary-box .line b, .totals .line b, .totals .line span:last-child { white-space: nowrap; }
 .summary-box .line > span:first-child { min-width: 0; }
 .cart-line .qty { justify-self: start; }
+.demo-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 16px; background: var(--warning-bg); color: #78350f; font-size: 13px; font-weight: 600; border-bottom: 1px solid #fde68a; }
+.demo-banner > svg { width: 18px; height: 18px; flex-shrink: 0; }
+.demo-banner > span { flex: 1; min-width: 200px; }

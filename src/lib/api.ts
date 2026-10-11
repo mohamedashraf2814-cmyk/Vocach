@@ -1,3 +1,5 @@
+import { IS_DEMO } from './env';
+
 // عميل HTTP موحد: يرسل الكوكيز ورمز CSRF ويحوّل الأخطاء إلى رسائل عربية
 export class ApiError extends Error {
   status: number;
@@ -74,7 +76,12 @@ export const api = {
   del: <T>(url: string) => request<T>('DELETE', url),
 };
 
-export const fileUrl = (name?: string | null) => (name ? `/api/files/${encodeURIComponent(name)}` : null);
+export const fileUrl = (name?: string | null): string | null => {
+  if (!name) return null;
+  // في نسخة العرض تُخزن الملفات داخل قاعدة بيانات المتصفح
+  if (IS_DEMO) return (window as unknown as { __demoFileUrl?: (n: string) => string | null }).__demoFileUrl?.(name) ?? null;
+  return `/api/files/${encodeURIComponent(name)}`;
+};
 
 export function readFileAsDataUrl(file: File, maxBytes = 3 * 1024 * 1024): Promise<string> {
   return new Promise((resolve, reject) => {

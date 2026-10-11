@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Package, Plus, Pencil, Power, Search, Tags, Trash2, ArrowDownUp, Truck, ImageOff, X } from 'lucide-react';
 import { api, fileUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { CAN_PRINT } from '../lib/env';
 import { useApi, useDebounced, useDraft, useSubmit } from '../lib/hooks';
 import { fmtDateTime, fmtMoney, fmtNum, round2 } from '../lib/format';
 import { MANUAL_MOVEMENTS, MOVEMENT_TYPES } from '../lib/constants';
@@ -491,7 +492,7 @@ export function PurchaseDetailPage() {
   const state = useApi(() => api.get<Purchase>(`/purchases/${id}`), [id]);
   return (
     <Page title="تفاصيل فاتورة الشراء" icon={<Truck />} tone="lime" breadcrumb={<><Link to="/purchases">المشتريات</Link><span>/</span><span>تفاصيل</span></>}
-      actions={state.data && <Button onClick={() => window.print()}>طباعة</Button>}>
+      actions={state.data && CAN_PRINT && <Button onClick={() => window.print()}>طباعة</Button>}>
       <AsyncView state={state}>
         {(p) => (
           <Card title={`فاتورة شراء #${p.id}`}>
