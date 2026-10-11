@@ -181,16 +181,13 @@ function RuleForm({ open, onClose, rule, onSaved }: { open: boolean; onClose: ()
         <Select label="تنطبق على" value={f.direction} onChange={(e) => setF({ ...f, direction: e.target.value })}>
           {Object.entries(DIR_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
-        <Select label="طريقة الحساب" value={f.calc_type} onChange={(e) => setF({ ...f, calc_type: e.target.value })}>
-          <option value="percent">نسبة مئوية من المبلغ</option><option value="fixed">مبلغ ثابت</option>
-        </Select>
-        <Input label={f.calc_type === 'percent' ? 'النسبة (%)' : 'المبلغ الثابت (ج.م)'} required type="number" step="0.01" min="0" dir="ltr" value={f.value} error={s.fieldErrors.value} onChange={(e) => setF({ ...f, value: e.target.value })} />
+        <Input wrapClass="span-2" label="نسبة العمولة (%)" required type="number" inputMode="decimal" step="0.01" min="0" max="100" dir="ltr" value={f.value} error={s.fieldErrors.value}
+          hint={f.value !== '' && Number(f.value) >= 0 ? `العمولة على كل 1,000 ج.م = ${fmtMoney(Math.round(Number(f.value) * 1000) / 100)}` : 'نسبة مئوية من مبلغ العملية، مثل 1 أو 1.5'}
+          onChange={(e) => setF({ ...f, value: e.target.value })} />
         <MoneyInput label="تنطبق من مبلغ (ج.م)" hint="اختياري" value={f.min_amount} error={s.fieldErrors.min_amount} onChange={(e) => setF({ ...f, min_amount: e.target.value })} />
         <MoneyInput label="حتى مبلغ (ج.م)" hint="اختياري" value={f.max_amount} error={s.fieldErrors.max_amount} onChange={(e) => setF({ ...f, max_amount: e.target.value })} />
-        {f.calc_type === 'percent' && <>
-          <MoneyInput label="أقل عمولة (ج.م)" hint="اختياري" value={f.min_commission} error={s.fieldErrors.min_commission} onChange={(e) => setF({ ...f, min_commission: e.target.value })} />
-          <MoneyInput label="أقصى عمولة (ج.م)" hint="اختياري" value={f.max_commission} error={s.fieldErrors.max_commission} onChange={(e) => setF({ ...f, max_commission: e.target.value })} />
-        </>}
+        <MoneyInput label="أقل عمولة (ج.م)" hint="اختياري: حد أدنى للعمولة مهما صغر المبلغ" value={f.min_commission} error={s.fieldErrors.min_commission} onChange={(e) => setF({ ...f, min_commission: e.target.value })} />
+        <MoneyInput label="أقصى عمولة (ج.م)" hint="اختياري: حد أقصى للعمولة مهما كبر المبلغ" value={f.max_commission} error={s.fieldErrors.max_commission} onChange={(e) => setF({ ...f, max_commission: e.target.value })} />
         <Textarea wrapClass="span-2" label="ملاحظات" value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
         <label className="check span-2"><input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />القاعدة مفعّلة</label>
         {s.error && <div className="span-2"><Alert>{s.error}</Alert></div>}
@@ -210,7 +207,7 @@ export function CommissionsPage() {
   const columns: Column<Rule>[] = [
     { key: 'service', label: 'الخدمة', render: (r) => <ServiceBadge service={r.service} /> },
     { key: 'direction', label: 'تنطبق على', render: (r) => DIR_LABEL[r.direction] },
-    { key: 'value', label: 'العمولة', render: (r) => <b>{r.calc_type === 'percent' ? `${r.value}%` : fmtMoney(r.value)}</b> },
+    { key: 'value', label: 'نسبة العمولة', render: (r) => <b className="ltr">{r.calc_type === 'percent' ? `${r.value}%` : `${fmtMoney(r.value)} (ثابت)`}</b> },
     { key: 'range', label: 'نطاق المبلغ', render: (r) => range(r.min_amount, r.max_amount) },
     { key: 'limits', label: 'حدود العمولة', render: (r) => r.calc_type === 'fixed' || (r.min_commission === null && r.max_commission === null) ? '—' : `${r.min_commission !== null ? `أدنى ${fmtMoney(r.min_commission)}` : ''} ${r.max_commission !== null ? `أقصى ${fmtMoney(r.max_commission)}` : ''}` },
     { key: 'active', label: 'الحالة', render: (r) => r.active ? <Badge tone="success">مفعّلة</Badge> : <Badge tone="neutral">معطّلة</Badge> },
@@ -219,7 +216,7 @@ export function CommissionsPage() {
   return (
     <Page title="العمولات" icon={<Percent />} tone="green" subtitle="قواعد العمولة الداخلية للمحل — ليست رسوم مقدمي الخدمة الرسمية"
       actions={can('commissions.manage') && <Button variant="primary" icon={<Plus />} onClick={() => setEdit(null)}>إضافة قاعدة</Button>}>
-      <Alert tone="info" className="mb-2">عند تسجيل عملية، يتم اختيار القاعدة المفعّلة الأكثر تحديداً المطابقة للخدمة ونوع العملية ونطاق المبلغ. إذا لم توجد قاعدة مطابقة تكون العمولة صفراً ما لم تُدخل يدوياً.</Alert>
+      <Alert tone="info" className="mb-2">عند تسجيل عملية، يتم اختيار القاعدة المفعّلة الأكثر تحديداً المطابقة للخدمة ونوع العملية ونطاق المبلغ. إذا لم توجد قاعدة مطابقة تكون العمولة صفراً ما لم تُدخل نسبتها يدوياً عند تسجيل العملية.</Alert>
       <div className="card">
         <AsyncView state={state}>
           {(rows) => rows.length === 0 ? (

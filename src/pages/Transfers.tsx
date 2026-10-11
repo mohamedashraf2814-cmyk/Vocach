@@ -5,7 +5,7 @@ import { api, fileUrl } from '../lib/api';
 import { CAN_PRINT } from '../lib/env';
 import { useAuth } from '../lib/auth';
 import { useApi, useDebounced, useDraft, useSubmit } from '../lib/hooks';
-import { fmtDateTime, fmtMoney, fmtNum, round2 } from '../lib/format';
+import { fmtDateTime, fmtMoney, fmtNum, fmtPct, pctOf, round2 } from '../lib/format';
 import { DIRECTIONS, SERVICE_KEYS, SERVICES, TRANSFER_STATUS, serviceBySlug, type Direction, type Service } from '../lib/constants';
 import { Page, NotFoundPage, useNotifications } from '../components/Layout';
 import {
@@ -51,7 +51,7 @@ export function TransfersBrowser({ fixedService, fixedAccount, compact }: { fixe
     { key: 'direction', label: 'النوع', render: (t) => DIRECTIONS[t.direction]?.label },
     ...(!fixedAccount ? [{ key: 'account', label: 'الحساب', render: (t: Transfer) => <span>{t.account_name}<div className="small muted ltr">{t.account_number}</div></span> }] : []),
     { key: 'amount', label: 'المبلغ', kind: 'money', sortable: true },
-    { key: 'commission', label: 'العمولة', kind: 'money', sortable: true },
+    { key: 'commission', label: 'العمولة', sortable: true, render: (t) => <span className="nowrap">{fmtMoney(t.commission)} <span className="small muted">({fmtPct(pctOf(t.commission, t.amount))})</span></span> },
     { key: 'recipient', label: 'رقم المستلم', render: (t) => t.recipient ? <span className="ltr">{t.recipient}</span> : '—' },
     { key: 'created_at', label: 'التاريخ', sortable: true, render: (t) => <span className="nowrap">{fmtDateTime(t.created_at)}</span> },
     { key: 'status', label: 'الحالة', render: (t) => <StatusBadge map={TRANSFER_STATUS} value={t.status} /> },
@@ -230,7 +230,7 @@ interface Customer { id: number; name: string; phone: string | null }
 export function NewTransferPage() {
   const [sp] = useSearchParams();
   const preService = sp.get('service') as Service | null;
-  const initial = { service: (preService && SERVICES[preService] ? preService : 'vodafone_cash') as Service, direction: 'send' as Direction, account_id: '', amount: '', recipient: '', customer_id: '', customer_label: '', notes: '', status: 'completed', manualCommission: false, commission_override: '' };
+  const initial = { service: (preService && SERVICES[preService] ? preService : 'vodafone_cash') as Service, direction: 'send' as Direction, account_id: '', amount: '', recipient: '', customer_id: '', customer_label: '', notes: '', status: 'completed', manualCommission: false, commission_percent: '' };
   const [f, setF, clearDraft] = useDraft('new-transfer', initial);
   useEffect(() => { if (preService && SERVICES[preService] && preService !== f.service) setF((x) => ({ ...x, service: preService, account_id: '' })); }, [preService]); // eslint-disable-line react-hooks/exhaustive-deps
   const [receipt, setReceipt] = useState<string | null>(null);
@@ -263,7 +263,12 @@ export function NewTransferPage() {
     return () => { alive = false; };
   }, [dAmount, f.service, f.direction]);
 
-  const commission = f.manualCommission ? (Number(f.commission_override) || 0) : calc.commission;
+  const manualPct = Number(f.commission_percent);
+  const commission = f.manualCommission
+    ? (validAmount && f.commission_percent !== '' && Number.isFinite(manualPct) ? round2((amountNum * manualPct) / 100) : null)
+    : calc.commission;
+  // النسبة الفعلية بعد تطبيق حدود العمولة الدنيا والقصوى
+  const effectivePct = validAmount && commission !== null ? pctOf(commission, amountNum) : null;
   const limitWarning = useMemo(() => {
     if (!account || !validAmount) return null;
     if (account.daily_remaining !== null && amountNum > account.daily_remaining) return `المبلغ يتجاوز المتبقي من الحد اليومي (${fmtMoney(account.daily_remaining)})`;
@@ -275,7 +280,7 @@ export function NewTransferPage() {
     const e: Record<string, string> = {};
     if (!f.account_id) e.account_id = 'اختر الحساب';
     if (!validAmount) e.amount = 'أدخل مبلغاً صحيحاً أكبر من صفر';
-    if (f.manualCommission && (f.commission_override === '' || Number(f.commission_override) < 0)) e.commission_override = 'أدخل قيمة عمولة صحيحة';
+    if (f.manualCommission && (f.commission_percent === '' || !Number.isFinite(manualPct) || manualPct < 0 || manualPct > 100)) e.commission_percent = 'أدخل نسبة بين 0 و 100';
     return e;
   };
   const [errs, setErrs] = useState<Record<string, string>>({});
@@ -292,7 +297,7 @@ export function NewTransferPage() {
     const r = await s.run(() => api.post<{ id: number; ref: string; commission: number }>('/transfers', {
       service: f.service, direction: f.direction, account_id: Number(f.account_id), amount: amountNum, recipient: f.recipient || null,
       customer_id: f.customer_id ? Number(f.customer_id) : null, notes: f.notes || null, status: f.status, receipt,
-      commission_override: f.manualCommission ? Number(f.commission_override) : null,
+      commission_percent: f.manualCommission ? manualPct : null,
     }));
     if (r) {
       setDone({ ...r, amount: amountNum, service: f.service });
@@ -338,9 +343,21 @@ export function NewTransferPage() {
   }
 
   const svc = SERVICES[f.service];
+  const summaryBox = (
+    <div className="summary-box">
+      <div className="line"><span>الخدمة</span><b>{svc.label}</b></div>
+      <div className="line"><span>النوع</span><b>{DIRECTIONS[f.direction].label}</b></div>
+      <div className="line"><span>الحساب</span><b>{account ? account.name : '—'}</b></div>
+      <div className="line"><span>المبلغ</span><b>{validAmount ? fmtMoney(amountNum) : '—'}</b></div>
+      <div className="line"><span>العمولة{effectivePct !== null && <span className="muted"> ({fmtPct(effectivePct)})</span>}</span><b>{calc.loading && !f.manualCommission ? 'جارٍ الحساب…' : commission === null ? '—' : fmtMoney(commission)}</b></div>
+      {validAmount && commission !== null && (
+        <div className="line total"><span>{f.direction === 'send' ? 'يدفعه العميل' : 'يُصرف للعميل'}</span><b>{fmtMoney(round2(f.direction === 'send' ? amountNum + commission : amountNum - commission))}</b></div>
+      )}
+    </div>
+  );
   return (
     <Page title="عملية جديدة" subtitle="تسجيل عملية تحويل في السجل — لا يتم تنفيذ أي تحويل مالي فعلي من هذه الشاشة" icon={<ArrowLeftRight />} tone="indigo">
-      <div className="grid-2" style={{ gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)', alignItems: 'start' }}>
+      <div className="split">
         <Card>
           <form className="stack" onSubmit={(e) => { e.preventDefault(); if (confirming) submit(); else review(); }} noValidate>
             <div className="field">
@@ -365,8 +382,11 @@ export function NewTransferPage() {
             {limitWarning && <Alert tone="warning">{limitWarning}</Alert>}
             <Input label={f.service === 'instapay' ? 'رقم أو عنوان المستلم (IPA)' : 'رقم المستلم / المرسل'} dir="ltr" inputMode={f.service === 'instapay' ? 'text' : 'tel'} hint="اختياري حسب نوع العملية" value={f.recipient} error={fe.recipient} onChange={(e) => set({ recipient: e.target.value })} />
             <CustomerPicker value={f.customer_id} label={f.customer_label} onChange={(id, label) => set({ customer_id: id, customer_label: label })} />
-            <label className="check"><input type="checkbox" checked={f.manualCommission} onChange={(e) => set({ manualCommission: e.target.checked })} />إدخال العمولة يدوياً بدلاً من قواعد العمولة</label>
-            {f.manualCommission && <MoneyInput label="العمولة (ج.م)" required value={f.commission_override} error={fe.commission_override} onChange={(e) => set({ commission_override: e.target.value })} />}
+            <label className="check"><input type="checkbox" checked={f.manualCommission} onChange={(e) => set({ manualCommission: e.target.checked })} />إدخال نسبة العمولة يدوياً بدلاً من قواعد العمولة</label>
+            {f.manualCommission && (
+              <Input label="نسبة العمولة (%)" required type="number" inputMode="decimal" step="0.01" min="0" max="100" dir="ltr" value={f.commission_percent} error={fe.commission_percent}
+                hint={commission !== null ? `العمولة = ${fmtMoney(commission)}` : 'مثل 1 أو 1.5'} onChange={(e) => set({ commission_percent: e.target.value })} />
+            )}
             <Select label="حالة العملية" value={f.status} onChange={(e) => set({ status: e.target.value })}>
               <option value="completed">مكتملة</option>
               <option value="pending">معلقة (بانتظار التأكيد)</option>
@@ -374,6 +394,7 @@ export function NewTransferPage() {
             <Textarea label="ملاحظات" value={f.notes} maxLength={500} onChange={(e) => set({ notes: e.target.value })} />
             <FileInput label="إيصال العملية (اختياري)" value={receipt} onChange={(v) => { setReceipt(v); setConfirming(false); }} />
             {s.error && <Alert>{s.error}</Alert>}
+            {confirming && <div className="mobile-only">{summaryBox}</div>}
             <div className="form-actions">
               {!confirming ? (
                 <Button type="submit" variant="primary" size="lg">مراجعة العملية</Button>
@@ -386,20 +407,11 @@ export function NewTransferPage() {
             </div>
           </form>
         </Card>
-        <div className="stack" style={{ position: 'sticky', top: 80 }}>
+        <div className={`stack split-aside ${confirming ? 'hide-mobile' : ''}`}>
           <Card title="ملخص العملية">
-            <div className="summary-box">
-              <div className="line"><span>الخدمة</span><b>{svc.label}</b></div>
-              <div className="line"><span>النوع</span><b>{DIRECTIONS[f.direction].label}</b></div>
-              <div className="line"><span>الحساب</span><b>{account ? account.name : '—'}</b></div>
-              <div className="line"><span>المبلغ</span><b>{validAmount ? fmtMoney(amountNum) : '—'}</b></div>
-              <div className="line"><span>العمولة</span><b>{calc.loading && !f.manualCommission ? 'جارٍ الحساب…' : commission === null ? '—' : fmtMoney(commission)}</b></div>
-              {validAmount && commission !== null && (
-                <div className="line total"><span>{f.direction === 'send' ? 'يدفعه العميل' : 'يُصرف للعميل'}</span><b>{fmtMoney(round2(f.direction === 'send' ? amountNum + commission : amountNum - commission))}</b></div>
-              )}
-            </div>
+            {summaryBox}
             {!f.manualCommission && validAmount && !calc.loading && !calc.ruleFound && !calc.error && (
-              <Alert tone="info" className="mt-1">لا توجد قاعدة عمولة مطابقة لهذه الخدمة والمبلغ، لذا ستكون العمولة صفراً. يمكنك إضافة قاعدة من صفحة العمولات أو إدخال العمولة يدوياً.</Alert>
+              <Alert tone="info" className="mt-1">لا توجد قاعدة عمولة مطابقة لهذه الخدمة والمبلغ، لذا ستكون العمولة صفراً. يمكنك إضافة قاعدة من صفحة العمولات أو إدخال نسبتها يدوياً.</Alert>
             )}
             {calc.error && <Alert className="mt-1">تعذر حساب العمولة: {calc.error}</Alert>}
             {confirming && <Alert tone="warning" className="mt-1">راجع البيانات ثم اضغط «تأكيد وحفظ العملية».</Alert>}
@@ -496,7 +508,7 @@ export function TransferDetailPage() {
                 ['نوع العملية', DIRECTIONS[t.direction]?.label],
                 ['الحساب', <Link to={`/accounts/${t.account_id}`}>{t.account_name} <span className="ltr muted">{t.account_number}</span></Link>],
                 ['المبلغ', fmtMoney(t.amount)],
-                ['العمولة', fmtMoney(t.commission)],
+                ['العمولة', `${fmtMoney(t.commission)} (${fmtPct(pctOf(t.commission, t.amount))})`],
                 [t.direction === 'send' ? 'المدفوع من العميل' : 'المصروف للعميل', fmtMoney(round2(t.direction === 'send' ? t.amount + t.commission : t.amount - t.commission))],
                 ['رقم المستلم', t.recipient ? <span className="ltr">{t.recipient}</span> : null],
                 ['العميل', t.customer_id ? <Link to={`/customers/${t.customer_id}`}>{t.customer_name}</Link> : 'بدون عميل'],

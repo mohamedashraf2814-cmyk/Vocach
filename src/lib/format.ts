@@ -36,3 +36,8 @@ export function monthStartIso() {
 }
 
 export const round2 = (n: number) => Math.round(n * 100) / 100;
+
+const pctFmt = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 });
+// نسبة العمولة من المبلغ
+export const pctOf = (part: number, whole: number) => (whole > 0 ? (part / whole) * 100 : 0);
+export const fmtPct = (v: number | null | undefined) => (v === null || v === undefined || Number.isNaN(v) ? '—' : `${pctFmt.format(v)}٪`);

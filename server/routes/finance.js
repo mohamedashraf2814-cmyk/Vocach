@@ -131,7 +131,8 @@ function ruleBody(body) {
   const b = {
     service: oneOf(body, 'service', SERVICES, { label: 'الخدمة' }),
     direction: oneOf(body, 'direction', [...DIRECTIONS, 'any'], { label: 'نوع العملية' }),
-    calc_type: oneOf(body, 'calc_type', ['percent', 'fixed'], { label: 'طريقة الحساب' }),
+    // العمولة نسبة مئوية من مبلغ العملية
+    calc_type: 'percent',
     min_amount: money(body, 'min_amount', { label: 'الحد الأدنى للمبلغ' }),
     max_amount: money(body, 'max_amount', { label: 'الحد الأقصى للمبلغ' }),
     min_commission: money(body, 'min_commission', { label: 'أقل عمولة' }),
@@ -140,8 +141,8 @@ function ruleBody(body) {
     active: body.active === undefined ? 1 : body.active ? 1 : 0,
   };
   const v = Number(body.value);
-  if (body.value === '' || body.value === undefined || !Number.isFinite(v) || v < 0) throw bad('قيمة العمولة مطلوبة ويجب أن تكون رقماً موجباً', { value: 'غير صالح' });
-  if (b.calc_type === 'percent' && v > 100) throw bad('النسبة المئوية لا يمكن أن تتجاوز 100%', { value: 'غير صالح' });
+  if (body.value === '' || body.value === undefined || !Number.isFinite(v) || v < 0) throw bad('نسبة العمولة مطلوبة ويجب أن تكون رقماً موجباً', { value: 'غير صالح' });
+  if (v > 100) throw bad('نسبة العمولة لا يمكن أن تتجاوز 100%', { value: 'غير صالح' });
   b.value = v;
   if (b.min_amount !== null && b.max_amount !== null && b.min_amount > b.max_amount) throw bad('الحد الأدنى للمبلغ أكبر من الحد الأقصى', { max_amount: 'غير صالح' });
   if (b.min_commission !== null && b.max_commission !== null && b.min_commission > b.max_commission) throw bad('أقل عمولة أكبر من أقصى عمولة', { max_commission: 'غير صالح' });
@@ -235,7 +236,12 @@ r.post('/transfers', requirePerm('transfers.create'), asyncRoute((req, res) => {
   const customerId = int(body, 'customer_id', { min: 1, label: 'العميل' });
   const notes = str(body, 'notes', { max: 500, label: 'ملاحظات' });
   const status = body.status === 'pending' ? 'pending' : 'completed';
-  const override = money(body, 'commission_override', { label: 'العمولة' });
+  let overridePct = null;
+  if (body.commission_percent !== undefined && body.commission_percent !== null && body.commission_percent !== '') {
+    overridePct = Number(body.commission_percent);
+    if (!Number.isFinite(overridePct) || overridePct < 0 || overridePct > 100) throw bad('نسبة العمولة يجب أن تكون بين 0 و 100', { commission_percent: 'غير صالح' });
+  }
+  const override = overridePct === null ? null : Math.round((amount * overridePct) / 100);
 
   const result = tx(() => {
     const acc = one('SELECT * FROM accounts WHERE id = ?', accountId);
@@ -264,7 +270,7 @@ r.post('/transfers', requirePerm('transfers.create'), asyncRoute((req, res) => {
     run('UPDATE transfers SET ref = ? WHERE id = ?', ref, id);
     return { id, ref, commission, commissionSource: override !== null ? 'manual' : rule ? 'rule' : 'none' };
   });
-  audit(req, 'create', 'transfer', result.id, { ref: result.ref, service, direction, amount: toMajor(amount), commission: toMajor(result.commission), source: result.commissionSource });
+  audit(req, 'create', 'transfer', result.id, { ref: result.ref, service, direction, amount: toMajor(amount), commission: toMajor(result.commission), source: result.commissionSource, manualPercent: overridePct });
   res.status(201).json({ id: result.id, ref: result.ref, commission: toMajor(result.commission) });
 }));
 

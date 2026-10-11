@@ -30,6 +30,7 @@ export function POSPage() {
   const [cat, setCat] = useState<string>('');
   const dq = useDebounced(q, 200);
   const searchRef = useRef<HTMLInputElement>(null);
+  const cartRef = useRef<HTMLElement>(null);
   const settings = useApi(() => api.get<Settings>('/settings'), []);
   const categories = useApi(() => api.get<Category[]>('/categories'), []);
   const products = useApi(() => api.get<{ items: Product[] }>('/products', { q: dq, category_id: cat, active: '1', pageSize: 200 }), [dq, cat]);
@@ -161,7 +162,7 @@ export function POSPage() {
           </AsyncView>
         </div>
 
-        <aside className="card cart" aria-label="سلة المشتريات">
+        <aside className="card cart" aria-label="سلة المشتريات" ref={cartRef}>
           <div className="card-header"><h2>السلة ({fmtNum(cart.reduce((n, l) => n + l.qty, 0))})</h2>{cart.length > 0 && <Button size="sm" variant="ghost" onClick={() => setCart([])}>تفريغ</Button>}</div>
           {cart.length === 0 ? <Empty icon={<ShoppingCart />} title="السلة فارغة" message="اضغط على منتج لإضافته" /> : (
             <div className="cart-lines">
@@ -200,6 +201,12 @@ export function POSPage() {
           </div>
         </aside>
       </div>
+      {cart.length > 0 && (
+        <div className="pos-mobile-bar">
+          <div><div className="small">{fmtNum(cart.reduce((n, l) => n + l.qty, 0))} قطعة في السلة</div><div className="bold">{fmtMoney(total)}</div></div>
+          <Button variant="primary" icon={<ShoppingCart />} onClick={() => cartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>عرض السلة والدفع</Button>
+        </div>
+      )}
     </Page>
   );
 }
