@@ -11,6 +11,8 @@ import adminRoutes from '../../server/routes/admin.js';
 import financeRoutes from '../../server/routes/finance.js';
 import inventoryRoutes from '../../server/routes/inventory.js';
 import operationsRoutes from '../../server/routes/operations.js';
+import rulesRoutes from '../../server/routes/rules.js';
+import shiftsRoutes from '../../server/routes/shifts.js';
 
 const api = Router();
 api.use(sessionMiddleware);
@@ -21,6 +23,8 @@ api.use(adminRoutes);
 api.use(financeRoutes);
 api.use(inventoryRoutes);
 api.use(operationsRoutes);
+api.use(rulesRoutes);
+api.use(shiftsRoutes);
 api.use((_req, _res, next) => next(new HttpError(404, 'المسار المطلوب غير موجود')));
 // eslint-disable-next-line no-unused-vars
 api.use((err, _req, res, _next) => {

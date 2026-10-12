@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeftRight, Plus, Search, CheckCircle2, Wallet, Printer, Ban, Check, Landmark } from 'lucide-react';
+import { ArrowLeftRight, Plus, Search, Wallet, Printer, Ban, Check, Landmark } from 'lucide-react';
 import { api, fileUrl } from '../lib/api';
 import { CAN_PRINT } from '../lib/env';
 import { useAuth } from '../lib/auth';
 import { useApi, useDebounced, useDraft, useSubmit } from '../lib/hooks';
 import { fmtDateTime, fmtMoney, fmtNum, fmtPct, pctOf, round2 } from '../lib/format';
-import { DIRECTIONS, SERVICE_KEYS, SERVICES, TRANSFER_STATUS, serviceBySlug, type Direction, type Service } from '../lib/constants';
+import { DIRECTION_KEYS, DIRECTIONS, SERVICE_KEYS, SERVICES, TRANSFER_STATUS, serviceBySlug, type Direction, type Service } from '../lib/constants';
 import { Page, NotFoundPage, useNotifications } from '../components/Layout';
 import {
   Alert, AsyncView, AttachmentLink, Badge, Button, Card, ConfirmDialog, DataTable, Empty, FileInput, Input, KV, MoneyInput, Pagination,
@@ -15,14 +15,22 @@ import {
 
 export interface Account {
   id: number; name: string; service: Service; number: string; owner: string | null; daily_limit: number | null; monthly_limit: number | null;
-  daily_used: number; monthly_used: number; daily_remaining: number | null; monthly_remaining: number | null; active: boolean; notes: string | null; transfers_count: number;
+  effective_daily_limit: number | null; effective_monthly_limit: number | null; daily_limit_source: 'account' | 'service' | null; monthly_limit_source: 'account' | 'service' | null;
+  daily_used: number; monthly_used: number; daily_remaining: number | null; monthly_remaining: number | null; counted_directions: string[];
+  active: boolean; notes: string | null; transfers_count: number;
+  // تظهر فقط لمن يملك صلاحية عرض الأرصدة
+  opening_balance?: number | null; opening_balance_at?: string | null; balance?: number | null; pending_effect?: number; pending_count?: number;
 }
 export interface Transfer {
-  id: number; ref: string; service: Service; direction: Direction; account_id: number; account_name: string; account_number: string; amount: number; commission: number;
+  id: number; ref: string; service: Service; direction: Direction; account_id: number | null; account_name: string | null; account_number: string | null; amount: number; commission: number;
+  commission_rate: number | null; commission_source: string | null;
   recipient: string | null; customer_id: number | null; customer_name: string | null; customer_phone: string | null; notes: string | null; receipt: string | null;
   status: string; user_name: string | null; created_at: string;
 }
 interface TransferList { items: Transfer[]; total: number; page: number; pageSize: number; summary: { amount: number; commission: number; count: number } }
+
+// النسبة المحفوظة مع العملية وقت تسجيلها، وإلا تُحسب من المبلغين (للعمليات القديمة)
+export const rateOf = (t: Transfer) => (t.commission_rate !== null && t.commission_rate !== undefined && t.commission_source !== 'none' ? t.commission_rate : pctOf(t.commission, t.amount));
 
 export function ServiceBadge({ service }: { service: Service }) {
   const s = SERVICES[service];
@@ -49,9 +57,9 @@ export function TransfersBrowser({ fixedService, fixedAccount, compact }: { fixe
     { key: 'ref', label: 'رقم العملية', render: (t) => <Link to={`/transfers/${t.id}`} className="bold ltr">{t.ref}</Link> },
     ...(!fixedService ? [{ key: 'service', label: 'الخدمة', render: (t: Transfer) => <ServiceBadge service={t.service} /> }] : []),
     { key: 'direction', label: 'النوع', render: (t) => DIRECTIONS[t.direction]?.label },
-    ...(!fixedAccount ? [{ key: 'account', label: 'الحساب', render: (t: Transfer) => <span>{t.account_name}<div className="small muted ltr">{t.account_number}</div></span> }] : []),
+    ...(!fixedAccount ? [{ key: 'account', label: 'الحساب', render: (t: Transfer) => t.account_id ? <span>{t.account_name}<div className="small muted ltr">{t.account_number}</div></span> : <span className="muted">بدون حساب المحل</span> }] : []),
     { key: 'amount', label: 'المبلغ', kind: 'money', sortable: true },
-    { key: 'commission', label: 'العمولة', sortable: true, render: (t) => <span className="nowrap">{fmtMoney(t.commission)} <span className="small muted">({fmtPct(pctOf(t.commission, t.amount))})</span></span> },
+    { key: 'commission', label: 'العمولة', sortable: true, render: (t) => <span className="nowrap">{fmtMoney(t.commission)} <span className="small muted">({fmtPct(rateOf(t))})</span></span> },
     { key: 'recipient', label: 'رقم المستلم', render: (t) => t.recipient ? <span className="ltr">{t.recipient}</span> : '—' },
     { key: 'created_at', label: 'التاريخ', sortable: true, render: (t) => <span className="nowrap">{fmtDateTime(t.created_at)}</span> },
     { key: 'status', label: 'الحالة', render: (t) => <StatusBadge map={TRANSFER_STATUS} value={t.status} /> },
@@ -82,7 +90,7 @@ export function TransfersBrowser({ fixedService, fixedAccount, compact }: { fixe
         <div className="field"><label htmlFor="td">النوع</label>
           <select id="td" className="select" value={f.direction} onChange={(e) => setF({ ...f, direction: e.target.value })}>
             <option value="">الكل</option>
-            {Object.entries(DIRECTIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            {DIRECTION_KEYS.map((k) => <option key={k} value={k}>{DIRECTIONS[k].label}</option>)}
           </select></div>
         <div className="field"><label htmlFor="tst">الحالة</label>
           <select id="tst" className="select" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
@@ -162,11 +170,12 @@ export function AccountCards({ accounts }: { accounts: Account[] }) {
   return (
     <div className="grid-3">
       {accounts.map((a) => (
-        <Link key={a.id} to={`/accounts/${a.id}`} className="card card-body" style={{ textDecoration: 'none', color: 'inherit', opacity: a.active ? 1 : .6 }}>
+        <Link key={a.id} to={a.balance !== undefined ? `/balances/${a.id}` : `/accounts/${a.id}`} className="card card-body" style={{ textDecoration: 'none', color: 'inherit', opacity: a.active ? 1 : .6 }}>
           <div className="row-between">
             <div><div className="bold">{a.name}</div><div className="small muted ltr" style={{ textAlign: 'right' }}>{a.number}</div></div>
             {!a.active && <Badge tone="neutral">موقوف</Badge>}
           </div>
+          {a.balance !== undefined && <BalanceLine a={a} />}
           <LimitBars a={a} />
         </Link>
       ))}
@@ -174,23 +183,38 @@ export function AccountCards({ accounts }: { accounts: Account[] }) {
   );
 }
 
+// رصيد النظام المحسوب (وليس رصيداً مباشراً من مزود الخدمة)
+export function BalanceLine({ a }: { a: Account }) {
+  return (
+    <div className="mt-1">
+      <div className="small muted">رصيد النظام</div>
+      {a.balance === null || a.balance === undefined
+        ? <div className="small" style={{ color: 'var(--warning)' }}>لم يُحدد رصيد افتتاحي</div>
+        : <div className="bold num" style={{ fontSize: 20, color: a.balance < 0 ? 'var(--danger)' : undefined }}>{fmtMoney(a.balance)}</div>}
+    </div>
+  );
+}
+
 export function LimitBars({ a }: { a: Account }) {
+  const src = (s: string | null) => (s === 'service' ? ' (حد الخدمة)' : '');
   return (
     <div className="stack mt-1" style={{ gap: 10 }}>
-      {a.daily_limit !== null ? (
+      {a.effective_daily_limit !== null ? (
         <div>
-          <div className="row-between small"><span>المستخدم اليوم</span><span className="bold">{fmtMoney(a.daily_used)} / {fmtMoney(a.daily_limit)}</span></div>
-          <Progress value={a.daily_used} max={a.daily_limit} />
-          <div className="small muted">المتبقي: {fmtMoney(a.daily_remaining)}</div>
+          <div className="row-between small"><span>المستخدم اليوم{src(a.daily_limit_source)}</span><span className="bold">{fmtMoney(a.daily_used)} / {fmtMoney(a.effective_daily_limit)}</span></div>
+          <Progress value={a.daily_used} max={a.effective_daily_limit} />
+          <div className="row-between small muted"><span>المتبقي: {fmtMoney(a.daily_remaining)}</span><span>{fmtPct(pctOf(a.daily_used, a.effective_daily_limit))}</span></div>
+          {a.daily_used > a.effective_daily_limit && <div className="small bold" style={{ color: 'var(--danger)' }}>تم تجاوز الحد اليومي</div>}
         </div>
-      ) : <div className="small muted">لا يوجد حد يومي محدد · المستخدم اليوم {fmtMoney(a.daily_used)}</div>}
-      {a.monthly_limit !== null ? (
+      ) : <div className="small muted">لا يوجد حد يومي · المستخدم اليوم {fmtMoney(a.daily_used)}</div>}
+      {a.effective_monthly_limit !== null ? (
         <div>
-          <div className="row-between small"><span>المستخدم هذا الشهر</span><span className="bold">{fmtMoney(a.monthly_used)} / {fmtMoney(a.monthly_limit)}</span></div>
-          <Progress value={a.monthly_used} max={a.monthly_limit} />
-          <div className="small muted">المتبقي: {fmtMoney(a.monthly_remaining)}</div>
+          <div className="row-between small"><span>المستخدم هذا الشهر{src(a.monthly_limit_source)}</span><span className="bold">{fmtMoney(a.monthly_used)} / {fmtMoney(a.effective_monthly_limit)}</span></div>
+          <Progress value={a.monthly_used} max={a.effective_monthly_limit} />
+          <div className="row-between small muted"><span>المتبقي: {fmtMoney(a.monthly_remaining)}</span><span>{fmtPct(pctOf(a.monthly_used, a.effective_monthly_limit))}</span></div>
+          {a.monthly_used > a.effective_monthly_limit && <div className="small bold" style={{ color: 'var(--danger)' }}>تم تجاوز الحد الشهري</div>}
         </div>
-      ) : <div className="small muted">لا يوجد حد شهري محدد · المستخدم هذا الشهر {fmtMoney(a.monthly_used)}</div>}
+      ) : <div className="small muted">لا يوجد حد شهري · المستخدم هذا الشهر {fmtMoney(a.monthly_used)}</div>}
     </div>
   );
 }
@@ -215,206 +239,215 @@ export function WalletsPage() {
           );
         })}
       </div>
-      <Card title="جميع الحسابات" actions={can('accounts.view') && <Link className="btn btn-sm btn-secondary" to="/accounts">الحسابات والحدود</Link>}>
+      <Card title="جميع الحسابات" actions={<>
+        {can('balances.view') && <Link className="btn btn-sm btn-secondary" to="/balances">الرصيد الحالي</Link>}
+        {can('accounts.view') && <Link className="btn btn-sm btn-secondary" to="/accounts">إدارة الحسابات</Link>}
+      </>}>
         <AsyncView state={accounts}>
-          {(list) => list.length === 0 ? <Empty icon={<Landmark />} title="لا توجد حسابات بعد" message="ابدأ بإضافة حسابات المحافظ والخطوط من صفحة الحسابات والحدود." /> : <AccountCards accounts={list} />}
+          {(list) => list.length === 0 ? <Empty icon={<Landmark />} title="لا توجد حسابات بعد" message="ابدأ بإضافة حسابات المحافظ والخطوط من صفحة إدارة الحسابات." /> : <AccountCards accounts={list} />}
         </AsyncView>
       </Card>
     </Page>
   );
 }
 
-/* ───────── عملية جديدة ───────── */
+/* ───────── عملية جديدة (إدخال سريع) ───────── */
 interface Customer { id: number; name: string; phone: string | null }
+interface Saved { id: number; ref: string; commission: number; amount: number; service: Service; direction: Direction; duplicate?: boolean }
+
+const newClientRef = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 
 export function NewTransferPage() {
   const [sp] = useSearchParams();
   const preService = sp.get('service') as Service | null;
-  const initial = { service: (preService && SERVICES[preService] ? preService : 'vodafone_cash') as Service, direction: 'send' as Direction, account_id: '', amount: '', recipient: '', customer_id: '', customer_label: '', notes: '', status: 'completed', manualCommission: false, commission_percent: '' };
-  const [f, setF, clearDraft] = useDraft('new-transfer', initial);
+  // الافتراضي «استلام / سحب» لأنه العملية الأكثر استخداماً
+  const initial = {
+    service: (preService && SERVICES[preService] ? preService : 'vodafone_cash') as Service, direction: 'receive' as Direction, account_id: '', amount: '',
+    recipient: '', customer_id: '', customer_label: '', notes: '', status: 'completed', manualCommission: false, commission_percent: '',
+  };
+  const [f, setF, clearDraft] = useDraft('new-transfer-v2', initial);
   useEffect(() => { if (preService && SERVICES[preService] && preService !== f.service) setF((x) => ({ ...x, service: preService, account_id: '' })); }, [preService]); // eslint-disable-line react-hooks/exhaustive-deps
   const [receipt, setReceipt] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [done, setDone] = useState<{ id: number; ref: string; commission: number; amount: number; service: Service } | null>(null);
+  const [saved, setSaved] = useState<Saved | null>(null);
+  const [errs, setErrs] = useState<Record<string, string>>({});
   const s = useSubmit();
   const toast = useToast();
+  const { can } = useAuth();
   const { refresh: refreshNotifs } = useNotifications();
-  const set = (patch: Partial<typeof f>) => { setF((x) => ({ ...x, ...patch })); setConfirming(false); };
+  const amountRef = useRef<HTMLInputElement>(null);
+  // مفتاح فريد لكل عملية: إعادة إرسال نفس الطلب لا تُنشئ عملية مكررة
+  const clientRef = useRef(newClientRef());
+  const set = (patch: Partial<typeof f>) => { setF((x) => ({ ...x, ...patch })); clientRef.current = newClientRef(); setErrs({}); };
 
+  const dir = DIRECTIONS[f.direction];
   const accounts = useApi(() => api.get<Account[]>('/accounts', { service: f.service, active: '1' }), [f.service]);
   useEffect(() => {
     // اختيار الحساب تلقائياً إذا كان هناك حساب واحد فقط
     if (accounts.data && accounts.data.length === 1 && !f.account_id) setF((x) => ({ ...x, account_id: String(accounts.data![0].id) }));
   }, [accounts.data]); // eslint-disable-line react-hooks/exhaustive-deps
-  const account = accounts.data?.find((a) => String(a.id) === f.account_id) || null;
+  const account = dir.usesAccount ? accounts.data?.find((a) => String(a.id) === f.account_id) || null : null;
 
   const amountNum = Number(f.amount);
   const validAmount = f.amount !== '' && Number.isFinite(amountNum) && amountNum > 0;
-  const dAmount = useDebounced(f.amount, 350);
-  const [calc, setCalc] = useState<{ loading: boolean; commission: number | null; ruleFound: boolean; error: string | null }>({ loading: false, commission: null, ruleFound: false, error: null });
+  const dAmount = useDebounced(f.amount, 250);
+  const [calc, setCalc] = useState<{ loading: boolean; commission: number | null; rate: number | null; ruleFound: boolean; error: string | null }>({ loading: false, commission: null, rate: null, ruleFound: false, error: null });
   useEffect(() => {
     const n = Number(dAmount);
-    if (!dAmount || !Number.isFinite(n) || n <= 0) { setCalc({ loading: false, commission: null, ruleFound: false, error: null }); return; }
+    if (!dAmount || !Number.isFinite(n) || n <= 0) { setCalc({ loading: false, commission: null, rate: null, ruleFound: false, error: null }); return; }
     let alive = true;
     setCalc((c) => ({ ...c, loading: true, error: null }));
-    api.get<{ commission: number; rule: unknown }>('/commissions/calculate', { service: f.service, direction: f.direction, amount: n })
-      .then((r) => alive && setCalc({ loading: false, commission: r.commission, ruleFound: !!r.rule, error: null }))
-      .catch((e) => alive && setCalc({ loading: false, commission: null, ruleFound: false, error: e.message }));
+    api.get<{ commission: number; rule: { value: number } | null }>('/commissions/calculate', { service: f.service, direction: f.direction, amount: n })
+      .then((r) => alive && setCalc({ loading: false, commission: r.commission, rate: r.rule ? r.rule.value : null, ruleFound: !!r.rule, error: null }))
+      .catch((e) => alive && setCalc({ loading: false, commission: null, rate: null, ruleFound: false, error: e.message }));
     return () => { alive = false; };
   }, [dAmount, f.service, f.direction]);
 
   const manualPct = Number(f.commission_percent);
   const commission = f.manualCommission
     ? (validAmount && f.commission_percent !== '' && Number.isFinite(manualPct) ? round2((amountNum * manualPct) / 100) : null)
-    : calc.commission;
-  // النسبة الفعلية بعد تطبيق حدود العمولة الدنيا والقصوى
+    : (dAmount === f.amount ? calc.commission : null);
   const effectivePct = validAmount && commission !== null ? pctOf(commission, amountNum) : null;
-  const limitWarning = useMemo(() => {
-    if (!account || !validAmount) return null;
-    if (account.daily_remaining !== null && amountNum > account.daily_remaining) return `المبلغ يتجاوز المتبقي من الحد اليومي (${fmtMoney(account.daily_remaining)})`;
-    if (account.monthly_remaining !== null && amountNum > account.monthly_remaining) return `المبلغ يتجاوز المتبقي من الحد الشهري (${fmtMoney(account.monthly_remaining)})`;
-    return null;
-  }, [account, validAmount, amountNum]);
+  const counted = account ? account.counted_directions.includes(f.direction) : false;
 
-  const localErrors = () => {
+  const warning = useMemo(() => {
+    if (!account || !validAmount) return null;
+    if (counted && account.daily_remaining !== null && amountNum > account.daily_remaining) return `المبلغ يتجاوز المتبقي من الحد اليومي (${fmtMoney(account.daily_remaining)})`;
+    if (counted && account.monthly_remaining !== null && amountNum > account.monthly_remaining) return `المبلغ يتجاوز المتبقي من الحد الشهري (${fmtMoney(account.monthly_remaining)})`;
+    if (f.direction === 'send' && account.balance !== null && account.balance !== undefined && amountNum > account.balance) return `المبلغ أكبر من رصيد الحساب في النظام (${fmtMoney(account.balance)})`;
+    return null;
+  }, [account, validAmount, amountNum, counted, f.direction]);
+
+  const balanceAfter = account && account.balance !== null && account.balance !== undefined && validAmount
+    ? round2(account.balance + (f.direction === 'receive' ? amountNum : f.direction === 'send' ? -amountNum : 0)) : null;
+
+  const validate = () => {
     const e: Record<string, string> = {};
-    if (!f.account_id) e.account_id = 'اختر الحساب';
+    if (dir.usesAccount && !f.account_id) e.account_id = 'اختر الحساب';
     if (!validAmount) e.amount = 'أدخل مبلغاً صحيحاً أكبر من صفر';
+    if (f.direction === 'direct' && !f.recipient.trim()) e.recipient = 'رقم المستلم مطلوب في التحويل المباشر';
     if (f.manualCommission && (f.commission_percent === '' || !Number.isFinite(manualPct) || manualPct < 0 || manualPct > 100)) e.commission_percent = 'أدخل نسبة بين 0 و 100';
     return e;
   };
-  const [errs, setErrs] = useState<Record<string, string>>({});
   const fe = { ...errs, ...s.fieldErrors };
 
-  const review = () => {
-    const e = localErrors();
+  // الحفظ مباشرة (Enter من خانة المبلغ أو زر الحفظ) بدون شاشة مراجعة
+  const save = async () => {
+    if (s.busy) return;
+    const e = validate();
     setErrs(e);
-    if (Object.keys(e).length) return;
-    setConfirming(true);
-  };
-
-  const submit = async () => {
-    const r = await s.run(() => api.post<{ id: number; ref: string; commission: number }>('/transfers', {
-      service: f.service, direction: f.direction, account_id: Number(f.account_id), amount: amountNum, recipient: f.recipient || null,
+    if (Object.keys(e).length) { if (e.amount || e.account_id) amountRef.current?.focus(); return; }
+    const r = await s.run(() => api.post<{ id: number; ref: string; commission: number; duplicate?: boolean }>('/transfers', {
+      service: f.service, direction: f.direction, account_id: dir.usesAccount ? Number(f.account_id) : null, amount: amountNum, recipient: f.recipient || null,
       customer_id: f.customer_id ? Number(f.customer_id) : null, notes: f.notes || null, status: f.status, receipt,
-      commission_percent: f.manualCommission ? manualPct : null,
+      commission_percent: f.manualCommission ? manualPct : null, client_ref: clientRef.current,
     }));
     if (r) {
-      setDone({ ...r, amount: amountNum, service: f.service });
+      setSaved({ ...r, amount: amountNum, service: f.service, direction: f.direction });
+      toast(r.duplicate ? `العملية ${r.ref} مسجلة بالفعل` : `تم حفظ العملية ${r.ref}`);
+      // تجهيز الشاشة للعملية التالية مع الإبقاء على الخدمة والنوع والحساب
+      setF((x) => ({ ...x, amount: '', recipient: '', customer_id: '', customer_label: '', notes: '', status: 'completed', manualCommission: false, commission_percent: '' }));
       clearDraft();
       setReceipt(null);
+      clientRef.current = newClientRef();
       refreshNotifs();
-      toast(`تم تسجيل العملية ${r.ref} بنجاح`);
-    } else {
-      setConfirming(false);
+      accounts.reload();
+      setTimeout(() => amountRef.current?.focus(), 0);
     }
   };
-
-  const startNew = () => {
-    setDone(null);
-    setF({ ...initial, service: done?.service || initial.service, account_id: f.account_id });
-    setConfirming(false);
-    setErrs({});
-    s.reset();
-  };
-
-  if (done) {
-    return (
-      <Page title="عملية جديدة" icon={<ArrowLeftRight />} tone="indigo">
-        <div className="card" style={{ maxWidth: 560, margin: '0 auto' }}>
-          <div className="success-panel">
-            <span className="ok"><CheckCircle2 /></span>
-            <h2>تم تسجيل العملية بنجاح</h2>
-            <p className="muted">رقم العملية</p>
-            <div className="bold ltr" style={{ fontSize: 26 }}>{done.ref}</div>
-            <div className="summary-box mt-2" style={{ textAlign: 'start' }}>
-              <div className="line"><span>الخدمة</span><b>{SERVICES[done.service].label}</b></div>
-              <div className="line"><span>المبلغ</span><b>{fmtMoney(done.amount)}</b></div>
-              <div className="line"><span>العمولة</span><b>{fmtMoney(done.commission)}</b></div>
-            </div>
-            <div className="row mt-2" style={{ justifyContent: 'center' }}>
-              <Button variant="primary" icon={<Plus />} onClick={startNew}>عملية جديدة</Button>
-              <Link className="btn btn-secondary" to={`/transfers/${done.id}`}>عرض التفاصيل</Link>
-            </div>
-          </div>
-        </div>
-      </Page>
-    );
-  }
 
   const svc = SERVICES[f.service];
   const summaryBox = (
     <div className="summary-box">
       <div className="line"><span>الخدمة</span><b>{svc.label}</b></div>
-      <div className="line"><span>النوع</span><b>{DIRECTIONS[f.direction].label}</b></div>
-      <div className="line"><span>الحساب</span><b>{account ? account.name : '—'}</b></div>
-      <div className="line"><span>المبلغ</span><b>{validAmount ? fmtMoney(amountNum) : '—'}</b></div>
-      <div className="line"><span>العمولة{effectivePct !== null && <span className="muted"> ({fmtPct(effectivePct)})</span>}</span><b>{calc.loading && !f.manualCommission ? 'جارٍ الحساب…' : commission === null ? '—' : fmtMoney(commission)}</b></div>
+      <div className="line"><span>النوع</span><b>{dir.label}</b></div>
+      <div className="line"><span>الحساب</span><b>{dir.usesAccount ? (account ? account.name : '—') : 'بدون حساب المحل'}</b></div>
+      <div className="line"><span>المبلغ</span><b className="num">{validAmount ? fmtMoney(amountNum) : '—'}</b></div>
+      <div className="line"><span>العمولة{effectivePct !== null && <span className="muted"> ({fmtPct(effectivePct)})</span>}</span><b className="num">{!f.manualCommission && validAmount && commission === null && !calc.error ? 'جارٍ الحساب…' : commission === null ? '—' : fmtMoney(commission)}</b></div>
       {validAmount && commission !== null && (
-        <div className="line total"><span>{f.direction === 'send' ? 'يدفعه العميل' : 'يُصرف للعميل'}</span><b>{fmtMoney(round2(f.direction === 'send' ? amountNum + commission : amountNum - commission))}</b></div>
+        <div className="line total"><span>{f.direction === 'receive' ? 'يُصرف للعميل' : 'يدفعه العميل'}</span><b className="num">{fmtMoney(round2(f.direction === 'receive' ? amountNum - commission : f.direction === 'send' ? amountNum + commission : commission))}</b></div>
       )}
+      {balanceAfter !== null && <div className="line small"><span className="muted">رصيد الحساب بعد العملية (النظام)</span><b className="num">{fmtMoney(balanceAfter)}</b></div>}
     </div>
   );
+
   return (
-    <Page title="عملية جديدة" subtitle="تسجيل عملية تحويل في السجل — لا يتم تنفيذ أي تحويل مالي فعلي من هذه الشاشة" icon={<ArrowLeftRight />} tone="indigo">
+    <Page title="عملية جديدة" subtitle="تسجيل العملية في النظام — لا يتم تنفيذ أي تحويل مالي فعلي من هذه الشاشة" icon={<ArrowLeftRight />} tone="indigo">
+      {saved && (
+        <Alert tone="success" className="mb-2">
+          <span>تم حفظ العملية <Link to={`/transfers/${saved.id}`} className="bold ltr">{saved.ref}</Link> — {DIRECTIONS[saved.direction].label} {fmtMoney(saved.amount)}، العمولة {fmtMoney(saved.commission)}{saved.duplicate ? ' (كانت مسجلة بالفعل ولم تُكرر)' : ''}</span>
+        </Alert>
+      )}
       <div className="split">
         <Card>
-          <form className="stack" onSubmit={(e) => { e.preventDefault(); if (confirming) submit(); else review(); }} noValidate>
-            <div className="field">
-              <span className="field-label">نوع الخدمة</span>
-              <Segmented<Service> label="نوع الخدمة" value={f.service} onChange={(v) => set({ service: v, account_id: '' })}
-                options={SERVICE_KEYS.map((k) => { const I = SERVICES[k].icon; return { value: k, label: SERVICES[k].label, icon: <I /> }; })} />
-            </div>
+          <form className="stack" onSubmit={(e) => { e.preventDefault(); save(); }} noValidate>
             <div className="field">
               <span className="field-label">نوع العملية</span>
               <Segmented<Direction> label="نوع العملية" value={f.direction} onChange={(v) => set({ direction: v })}
-                options={(Object.keys(DIRECTIONS) as Direction[]).map((k) => ({ value: k, label: DIRECTIONS[k].label }))} />
-              <span className="hint">{DIRECTIONS[f.direction].hint}</span>
+                options={DIRECTION_KEYS.map((k) => ({ value: k, label: DIRECTIONS[k].label }))} />
+              <span className="hint">{dir.hint}</span>
             </div>
-            <Select label="الحساب / الخط" required value={f.account_id} error={fe.account_id} onChange={(e) => set({ account_id: e.target.value })}
-              disabled={accounts.loading} hint={accounts.data && accounts.data.length === 0 ? `لا توجد حسابات نشطة لخدمة ${svc.label}. أضف حساباً من صفحة الحسابات والحدود.` : undefined}>
-              <option value="">{accounts.loading ? 'جارٍ التحميل…' : 'اختر الحساب'}</option>
-              {accounts.data?.map((a) => <option key={a.id} value={a.id}>{a.name} — {a.number}</option>)}
-            </Select>
-            {accounts.error && <Alert>{accounts.error.message}</Alert>}
-            {account && (account.daily_limit !== null || account.monthly_limit !== null) && <div className="summary-box"><LimitBars a={account} /></div>}
-            <MoneyInput label="المبلغ (ج.م)" required inputClass="input-lg" value={f.amount} error={fe.amount} onChange={(e) => set({ amount: e.target.value })} />
-            {limitWarning && <Alert tone="warning">{limitWarning}</Alert>}
-            <Input label={f.service === 'instapay' ? 'رقم أو عنوان المستلم (IPA)' : 'رقم المستلم / المرسل'} dir="ltr" inputMode={f.service === 'instapay' ? 'text' : 'tel'} hint="اختياري حسب نوع العملية" value={f.recipient} error={fe.recipient} onChange={(e) => set({ recipient: e.target.value })} />
-            <CustomerPicker value={f.customer_id} label={f.customer_label} onChange={(id, label) => set({ customer_id: id, customer_label: label })} />
-            <label className="check"><input type="checkbox" checked={f.manualCommission} onChange={(e) => set({ manualCommission: e.target.checked })} />إدخال نسبة العمولة يدوياً بدلاً من قواعد العمولة</label>
-            {f.manualCommission && (
-              <Input label="نسبة العمولة (%)" required type="number" inputMode="decimal" step="0.01" min="0" max="100" dir="ltr" value={f.commission_percent} error={fe.commission_percent}
-                hint={commission !== null ? `العمولة = ${fmtMoney(commission)}` : 'مثل 1 أو 1.5'} onChange={(e) => set({ commission_percent: e.target.value })} />
+            <div className="field">
+              <span className="field-label">الخدمة</span>
+              <Segmented<Service> label="الخدمة" value={f.service} onChange={(v) => set({ service: v, account_id: '' })}
+                options={SERVICE_KEYS.map((k) => { const I = SERVICES[k].icon; return { value: k, label: SERVICES[k].label, icon: <I /> }; })} />
+            </div>
+            {dir.usesAccount && (
+              <>
+                <Select label="الحساب / الخط" required value={f.account_id} error={fe.account_id} onChange={(e) => set({ account_id: e.target.value })}
+                  disabled={accounts.loading} hint={accounts.data && accounts.data.length === 0 ? `لا توجد حسابات نشطة لخدمة ${svc.label}. أضف حساباً من «إدارة الحسابات»، أو اختر «تحويل مباشر للعميل».` : undefined}>
+                  <option value="">{accounts.loading ? 'جارٍ التحميل…' : 'اختر الحساب'}</option>
+                  {accounts.data?.map((a) => <option key={a.id} value={a.id}>{a.name} — {a.number}{a.balance !== undefined && a.balance !== null ? ` — رصيد ${fmtMoney(a.balance)}` : ''}</option>)}
+                </Select>
+                {accounts.error && <Alert>{accounts.error.message}</Alert>}
+                {account && (account.effective_daily_limit !== null || account.effective_monthly_limit !== null) && (
+                  <div className="summary-box">
+                    {!counted && <div className="small muted">هذا النوع من العمليات لا يُحتسب في حدود هذه الخدمة حسب القواعد الحالية.</div>}
+                    <LimitBars a={account} />
+                  </div>
+                )}
+              </>
             )}
-            <Select label="حالة العملية" value={f.status} onChange={(e) => set({ status: e.target.value })}>
-              <option value="completed">مكتملة</option>
-              <option value="pending">معلقة (بانتظار التأكيد)</option>
-            </Select>
-            <Textarea label="ملاحظات" value={f.notes} maxLength={500} onChange={(e) => set({ notes: e.target.value })} />
-            <FileInput label="إيصال العملية (اختياري)" value={receipt} onChange={(v) => { setReceipt(v); setConfirming(false); }} />
+            <MoneyInput label="المبلغ (ج.م)" required inputClass="input-lg" value={f.amount} error={fe.amount} ref={amountRef} autoFocus
+              hint="اضغط Enter للحفظ مباشرة" onChange={(e) => { setF((x) => ({ ...x, amount: e.target.value })); clientRef.current = newClientRef(); setErrs({}); }} />
+            {warning && <Alert tone="warning">{warning}</Alert>}
+            {(f.direction === 'direct' || f.direction === 'send' || f.recipient) && (
+              <Input label={f.direction === 'direct' ? 'رقم المستلم' : f.service === 'instapay' ? 'رقم أو عنوان المستلم (IPA)' : 'رقم المستلم'} required={f.direction === 'direct'} dir="ltr"
+                inputMode={f.service === 'instapay' ? 'text' : 'tel'} hint={f.direction === 'direct' ? undefined : 'اختياري'} value={f.recipient} error={fe.recipient} onChange={(e) => set({ recipient: e.target.value })} />
+            )}
+            <details className="more-options">
+              <summary>خيارات إضافية (العميل، الملاحظات، الإيصال، العمولة اليدوية)</summary>
+              <div className="stack mt-2">
+                {f.direction === 'receive' && !f.recipient && (
+                  <Input label="رقم المرسل" dir="ltr" inputMode="tel" hint="اختياري" value={f.recipient} error={fe.recipient} onChange={(e) => set({ recipient: e.target.value })} />
+                )}
+                <CustomerPicker value={f.customer_id} label={f.customer_label} onChange={(id, label) => set({ customer_id: id, customer_label: label })} />
+                <label className="check"><input type="checkbox" checked={f.manualCommission} onChange={(e) => set({ manualCommission: e.target.checked })} />إدخال نسبة العمولة يدوياً بدلاً من القاعدة</label>
+                {f.manualCommission && (
+                  <Input label="نسبة العمولة (%)" required type="number" inputMode="decimal" step="0.01" min="0" max="100" dir="ltr" value={f.commission_percent} error={fe.commission_percent}
+                    hint={commission !== null ? `العمولة = ${fmtMoney(commission)}` : 'مثل 1 أو 1.5'} onChange={(e) => set({ commission_percent: e.target.value })} />
+                )}
+                <Select label="حالة العملية" value={f.status} onChange={(e) => set({ status: e.target.value })}>
+                  <option value="completed">مكتملة</option>
+                  <option value="pending">معلقة (بانتظار التأكيد)</option>
+                </Select>
+                <Textarea label="ملاحظات" value={f.notes} maxLength={500} onChange={(e) => set({ notes: e.target.value })} />
+                <FileInput label="إيصال العملية" value={receipt} onChange={(v) => { setReceipt(v); clientRef.current = newClientRef(); }} />
+              </div>
+            </details>
             {s.error && <Alert>{s.error}</Alert>}
-            {confirming && <div className="mobile-only">{summaryBox}</div>}
+            {!f.manualCommission && validAmount && !calc.loading && !calc.ruleFound && !calc.error && dAmount === f.amount && (
+              <Alert tone="info">لا توجد قاعدة عمولة لهذه الخدمة ونوع العملية، لذا ستكون العمولة صفراً.{can('commissions.view') && <> <Link to="/commissions">إعداد العمولات</Link></>}</Alert>
+            )}
+            <div className="mobile-only">{summaryBox}</div>
             <div className="form-actions">
-              {!confirming ? (
-                <Button type="submit" variant="primary" size="lg">مراجعة العملية</Button>
-              ) : (
-                <>
-                  <Button type="submit" variant="success" size="lg" loading={s.busy} icon={<Check />}>تأكيد وحفظ العملية</Button>
-                  <Button variant="ghost" onClick={() => setConfirming(false)} disabled={s.busy}>تعديل</Button>
-                </>
-              )}
+              <Button type="submit" variant="primary" size="lg" loading={s.busy} icon={<Check />}>{s.busy ? 'جارٍ الحفظ…' : 'حفظ العملية'}</Button>
             </div>
           </form>
         </Card>
-        <div className={`stack split-aside ${confirming ? 'hide-mobile' : ''}`}>
+        <div className="stack split-aside hide-mobile">
           <Card title="ملخص العملية">
             {summaryBox}
-            {!f.manualCommission && validAmount && !calc.loading && !calc.ruleFound && !calc.error && (
-              <Alert tone="info" className="mt-1">لا توجد قاعدة عمولة مطابقة لهذه الخدمة والمبلغ، لذا ستكون العمولة صفراً. يمكنك إضافة قاعدة من صفحة العمولات أو إدخال نسبتها يدوياً.</Alert>
-            )}
             {calc.error && <Alert className="mt-1">تعذر حساب العمولة: {calc.error}</Alert>}
-            {confirming && <Alert tone="warning" className="mt-1">راجع البيانات ثم اضغط «تأكيد وحفظ العملية».</Alert>}
           </Card>
         </div>
       </div>
@@ -506,10 +539,11 @@ export function TransferDetailPage() {
               <KV items={[
                 ['الخدمة', <ServiceBadge service={t.service} />],
                 ['نوع العملية', DIRECTIONS[t.direction]?.label],
-                ['الحساب', <Link to={`/accounts/${t.account_id}`}>{t.account_name} <span className="ltr muted">{t.account_number}</span></Link>],
+                ['الحساب', t.account_id ? <Link to={can('balances.view') ? `/balances/${t.account_id}` : `/accounts/${t.account_id}`}>{t.account_name} <span className="ltr muted">{t.account_number}</span></Link> : 'بدون حساب المحل (تحويل مباشر)'],
                 ['المبلغ', fmtMoney(t.amount)],
-                ['العمولة', `${fmtMoney(t.commission)} (${fmtPct(pctOf(t.commission, t.amount))})`],
-                [t.direction === 'send' ? 'المدفوع من العميل' : 'المصروف للعميل', fmtMoney(round2(t.direction === 'send' ? t.amount + t.commission : t.amount - t.commission))],
+                ['العمولة', `${fmtMoney(t.commission)} (${fmtPct(rateOf(t))})`],
+                ['مصدر العمولة', t.commission_source === 'manual' ? 'نسبة يدوية' : t.commission_source === 'rule' ? 'قاعدة العمولة وقت التسجيل' : t.commission_source === 'none' ? 'لا توجد قاعدة' : null],
+                [t.direction === 'receive' ? 'المصروف للعميل' : 'المدفوع من العميل', fmtMoney(round2(t.direction === 'receive' ? t.amount - t.commission : t.direction === 'send' ? t.amount + t.commission : t.commission))],
                 ['رقم المستلم', t.recipient ? <span className="ltr">{t.recipient}</span> : null],
                 ['العميل', t.customer_id ? <Link to={`/customers/${t.customer_id}`}>{t.customer_name}</Link> : 'بدون عميل'],
                 ['التاريخ والوقت', fmtDateTime(t.created_at)],

@@ -9,11 +9,11 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:server": "node --disable-warning=ExperimentalWarning --watch server/index.js",
+    "dev:server": "TZ=${TZ:-Africa/Cairo} node --disable-warning=ExperimentalWarning --watch server/index.js",
     "dev:client": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "start": "NODE_ENV=production node --disable-warning=ExperimentalWarning server/index.js",
+    "start": "TZ=${TZ:-Africa/Cairo} NODE_ENV=production node --disable-warning=ExperimentalWarning server/index.js",
     "build:demo": "node scripts/build-demo.mjs"
   },
   "dependencies": {

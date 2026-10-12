@@ -1,5 +1,9 @@
-export const SERVICES = ['vodafone_cash', 'instapay', 'mastercard', 'wallet'];
-export const DIRECTIONS = ['send', 'receive'];
+export const SERVICES = ['vodafone_cash', 'instapay', 'mastercard', 'visa_withdrawal', 'wallet'];
+// send = تحويل (من حساب المحل)، receive = استلام / سحب (إلى حساب المحل)، direct = تحويل مباشر للعميل بدون حساب المحل
+export const DIRECTIONS = ['send', 'receive', 'direct'];
+// أثر كل نوع عملية على رصيد حساب المحل
+export const BALANCE_EFFECT = { send: -1, receive: 1, direct: 0 };
+export const ADJUSTMENT_TYPES = ['deposit', 'withdraw', 'correction'];
 export const TRANSFER_STATUSES = ['completed', 'pending', 'cancelled'];
 export const PAYMENT_METHODS = ['cash', 'vodafone_cash', 'instapay', 'mastercard'];
 export const MOVEMENT_TYPES = ['in', 'purchase', 'sale', 'return', 'adjust', 'damaged', 'withdraw', 'sale_cancel'];
@@ -9,6 +13,9 @@ export const MANUAL_MOVEMENT_TYPES = ['in', 'return', 'adjust', 'damaged', 'with
 export const PERMISSIONS = [
   'transfers.view', 'transfers.create', 'transfers.manage',
   'accounts.view', 'accounts.manage',
+  'balances.view', 'balances.manage',
+  'rules.view', 'rules.manage',
+  'shifts.view', 'shifts.operate', 'shifts.manage',
   'commissions.view', 'commissions.manage',
   'pos.use', 'sales.view', 'sales.cancel',
   'products.view', 'products.manage',
@@ -32,10 +39,12 @@ export const SETTING_KEYS = {
   invoice_footer: { type: 'string', max: 500 },
   transfer_prefix: { type: 'string', max: 10 },
   enforce_account_limits: { type: 'bool' },
+  enforce_account_balance: { type: 'bool' },
   limit_warning_percent: { type: 'int', min: 1, max: 100 },
   allow_negative_stock: { type: 'bool' },
   enabled_payment_methods: { type: 'list', values: PAYMENT_METHODS },
   session_hours: { type: 'int', min: 1, max: 720 },
+  secure_unlock_minutes: { type: 'int', min: 1, max: 240 },
 };
 
 // إعدادات النظام الافتراضية (سلوكية فقط وليست بيانات)
@@ -43,8 +52,10 @@ export const SETTING_DEFAULTS = {
   invoice_prefix: 'INV',
   transfer_prefix: 'TR',
   enforce_account_limits: true,
+  enforce_account_balance: true,
   limit_warning_percent: 80,
   allow_negative_stock: false,
   enabled_payment_methods: ['cash'],
   session_hours: 12,
+  secure_unlock_minutes: 15,
 };

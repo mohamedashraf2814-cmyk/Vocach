@@ -233,8 +233,9 @@ interface Settlement {
 }
 const FLOW_LABELS: Record<string, { label: string; dir: 'in' | 'out' }> = {
   cash_sales: { label: 'مبيعات نقدية', dir: 'in' },
-  send_transfers: { label: 'عمليات إرسال/إيداع (المبلغ + العمولة)', dir: 'in' },
+  send_transfers: { label: 'عمليات التحويل (المبلغ + العمولة)', dir: 'in' },
   receive_commissions: { label: 'عمولات عمليات الاستلام/السحب', dir: 'in' },
+  direct_commissions: { label: 'عمولات التحويل المباشر للعميل', dir: 'in' },
   receive_transfers: { label: 'مبالغ مصروفة لعمليات الاستلام/السحب', dir: 'out' },
   expenses: { label: 'المصروفات', dir: 'out' },
   purchases: { label: 'المشتريات', dir: 'out' },

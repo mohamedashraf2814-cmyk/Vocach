@@ -1,15 +1,15 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeftRight, Percent, Receipt, PackageX } from 'lucide-react';
+import { ArrowLeftRight, Percent, Receipt, PackageX, Lock, UserCheck } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
 import { useApi } from '../lib/hooks';
-import { fmtMoney, fmtNum } from '../lib/format';
+import { fmtDateTime, fmtMoney, fmtNum } from '../lib/format';
 import { MODULES } from '../lib/constants';
 import { TopBar } from '../components/Layout';
 import { Stat, Empty } from '../components/ui';
 
-interface Summary { date: string; transfers?: { count: number; amount: number; commission: number }; sales?: { count: number; total: number }; lowStock?: number }
+interface Summary { date: string; transfers?: { count: number; amount: number; commission: number }; sales?: { count: number; total: number }; lowStock?: number; shift?: { id: number; status: string; opened_at: string; name: string } | null }
 
 export function HomePage() {
   const { user, can, businessName } = useAuth();
@@ -41,6 +41,12 @@ export function HomePage() {
             )}
           </section>
         )}
+        {s && s.shift !== undefined && (
+          <Link to="/shifts" className={`alert ${s.shift ? (s.shift.status === 'open' ? 'alert-success' : 'alert-warning') : 'alert-info'} mb-2`} style={{ textDecoration: 'none' }}>
+            <UserCheck aria-hidden />
+            <div>{!s.shift ? 'لا توجد وردية مفتوحة — اضغط لتفعيل الشيفت' : s.shift.status === 'open' ? `الوردية الحالية: ${s.shift.name} منذ ${fmtDateTime(s.shift.opened_at)}` : `وردية ${s.shift.name} بانتظار تأكيد الاستلام`}</div>
+          </Link>
+        )}
         {summary.error && <p className="small muted mb-2">تعذر تحميل ملخص اليوم: {summary.error.message}</p>}
 
         {modules.length === 0 ? (
@@ -48,7 +54,8 @@ export function HomePage() {
         ) : (
           <nav className="tiles" aria-label="أقسام النظام">
             {modules.map((m) => (
-              <Link key={m.key} to={m.to} className="tile">
+              <Link key={m.key} to={m.to} className="tile" aria-label={m.secure ? `${m.title} (محمية برمز)` : undefined}>
+                {m.secure && <span className="secure-lock" aria-hidden><Lock /></span>}
                 <span className={`tile-icon tone-${m.tone}`}><m.icon aria-hidden /></span>
                 <span className="tile-title">{m.title}</span>
                 <span className="tile-desc">{m.desc}</span>

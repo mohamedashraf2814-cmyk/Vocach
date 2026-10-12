@@ -90,12 +90,14 @@ export function loadUser(userId) {
 export function sessionMiddleware(req, _res, next) {
   const token = parseCookies(req.headers.cookie)[COOKIE];
   if (token) {
-    const s = one('SELECT user_id, csrf_token, expires_at FROM sessions WHERE token_hash = ?', sha(token));
+    const s = one('SELECT user_id, csrf_token, expires_at, secure_until FROM sessions WHERE token_hash = ?', sha(token));
     if (s && s.expires_at > Date.now()) {
       const user = loadUser(s.user_id);
       if (user && user.active) {
         req.user = user;
         req.csrf = s.csrf_token;
+        req.sessionHash = sha(token);
+        req.secureUntil = s.secure_until || 0;
       }
     } else if (s) {
       run('DELETE FROM sessions WHERE token_hash = ?', sha(token));
@@ -160,4 +162,20 @@ export function loginFailed(key) {
 }
 export function loginSucceeded(key) {
   attempts.delete(key);
+}
+
+/* ───────── رمز حماية شاشات العمولات والقواعد ───────── */
+// الرمز يُخزن مشفراً (scrypt) في الإعدادات، والفتح يُسجل على الجلسة لمدة محدودة
+export function securePinHash() {
+  const r = one("SELECT value FROM settings WHERE key = 'secure_pin_hash'");
+  if (!r) return null;
+  try { return JSON.parse(r.value) || null; } catch { return null; }
+}
+
+export function requireSecure(req, _res, next) {
+  if (!securePinHash()) return next();
+  if (req.secureUntil && req.secureUntil > Date.now()) return next();
+  const e = new HttpError(423, 'هذه الشاشة محمية برمز. أدخل رمز الحماية للمتابعة');
+  e.fields = { secure: 'locked' };
+  next(e);
 }

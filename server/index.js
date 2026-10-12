@@ -9,6 +9,8 @@ import adminRoutes from './routes/admin.js';
 import financeRoutes from './routes/finance.js';
 import inventoryRoutes from './routes/inventory.js';
 import operationsRoutes from './routes/operations.js';
+import rulesRoutes from './routes/rules.js';
+import shiftsRoutes from './routes/shifts.js';
 
 const app = express();
 const PORT = Number(process.env.PORT || process.env.API_PORT || 3001);
@@ -34,6 +36,8 @@ api.use(adminRoutes);
 api.use(financeRoutes);
 api.use(inventoryRoutes);
 api.use(operationsRoutes);
+api.use(rulesRoutes);
+api.use(shiftsRoutes);
 api.use((_req, _res, next) => next(new HttpError(404, 'المسار المطلوب غير موجود')));
 
 // معالج الأخطاء: رسائل عربية دون كشف تفاصيل داخلية

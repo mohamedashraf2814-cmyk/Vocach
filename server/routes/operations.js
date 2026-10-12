@@ -3,9 +3,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { all, one, run, tx, UPLOAD_DIR } from '../db.js';
 import {
-  asyncRoute, audit, bad, mapMoney, money, notFound, paging, saveDataUrl, removeUpload, str, toMajor, isDate, today, likeParam, HttpError,
+  asyncRoute, audit, bad, fmtAmount, mapMoney, money, notFound, paging, saveDataUrl, removeUpload, str, toMajor, isDate, today, likeParam, HttpError,
 } from '../util.js';
 import { can, requirePerm, getSettings } from '../auth.js';
+import { accountView, cashFlow } from '../ledger.js';
 
 const r = Router();
 
@@ -91,23 +92,6 @@ r.delete('/expenses/:id', requirePerm('expenses.manage'), asyncRoute((req, res) 
 }));
 
 /* ───────── التقفيل اليومي ───────── */
-// حساب حركة النقدية في الدرج ليوم محدد من السجلات الفعلية
-export function cashFlow(date, includePurchases = true) {
-  const q = (sql) => one(sql, date).v || 0;
-  const b = {
-    cash_sales: q("SELECT COALESCE(SUM(total),0) AS v FROM sales WHERE status = 'completed' AND payment_method = 'cash' AND date(created_at) = ?"),
-    send_transfers: q("SELECT COALESCE(SUM(amount + commission),0) AS v FROM transfers WHERE status = 'completed' AND direction = 'send' AND date(created_at) = ?"),
-    receive_commissions: q("SELECT COALESCE(SUM(commission),0) AS v FROM transfers WHERE status = 'completed' AND direction = 'receive' AND date(created_at) = ?"),
-    receive_transfers: q("SELECT COALESCE(SUM(amount),0) AS v FROM transfers WHERE status = 'completed' AND direction = 'receive' AND date(created_at) = ?"),
-    expenses: q('SELECT COALESCE(SUM(amount),0) AS v FROM expenses WHERE date = ?'),
-    purchases: includePurchases ? q('SELECT COALESCE(SUM(total),0) AS v FROM purchases WHERE date(created_at) = ?') : 0,
-  };
-  const inflow = b.cash_sales + b.send_transfers + b.receive_commissions;
-  const outflow = b.receive_transfers + b.expenses + b.purchases;
-  const pending = one("SELECT COUNT(*) AS c FROM transfers WHERE status = 'pending' AND date(created_at) = ?", date).c;
-  return { breakdown: b, inflow, outflow, includePurchases, pendingTransfers: pending };
-}
-
 const SETTLEMENT_MONEY = ['opening_balance', 'total_inflow', 'total_outflow', 'expected_balance', 'actual_balance', 'difference'];
 const mapSettlement = (s) => {
   const m = mapMoney(s, SETTLEMENT_MONEY);
@@ -136,7 +120,7 @@ r.get('/settlements', requirePerm('settlements.view'), (req, res) => {
 r.get('/settlements/preview', requirePerm('settlements.create'), asyncRoute((req, res) => {
   const date = isDate(req.query.date) ? req.query.date : today();
   const includePurchases = req.query.include_purchases !== '0';
-  const flow = cashFlow(date, includePurchases);
+  const flow = cashFlow({ date }, includePurchases);
   const prev = one('SELECT date, actual_balance FROM settlements WHERE date < ? ORDER BY date DESC LIMIT 1', date);
   const existing = one('SELECT id, status FROM settlements WHERE date = ?', date);
   res.json({
@@ -167,7 +151,7 @@ r.post('/settlements', requirePerm('settlements.create'), asyncRoute((req, res) 
   const includePurchases = req.body?.include_purchases !== false;
   const result = tx(() => {
     if (one('SELECT id FROM settlements WHERE date = ?', date)) throw new HttpError(409, 'يوجد تقفيل مسجل لهذا اليوم بالفعل');
-    const flow = cashFlow(date, includePurchases);
+    const flow = cashFlow({ date }, includePurchases);
     const expected = opening + flow.inflow - flow.outflow;
     const diff = actual - expected;
     const rr = run(`INSERT INTO settlements (date, opening_balance, total_inflow, total_outflow, expected_balance, actual_balance, difference, breakdown, notes, user_id)
@@ -218,6 +202,11 @@ r.get('/dashboard', (req, res) => {
   if (can(u, 'products.view') || can(u, 'stock.view')) {
     out.lowStock = one('SELECT COUNT(*) AS c FROM products WHERE active = 1 AND quantity <= min_stock').c;
   }
+  if (can(u, 'shifts.view') || can(u, 'shifts.operate')) {
+    const sh = one(`SELECT s.id, s.status, s.opened_at, u2.full_name AS name FROM shifts s LEFT JOIN users u2 ON u2.id = s.opened_by
+      WHERE s.status IN ('open','pending_handover') ORDER BY s.status = 'open' DESC, s.id DESC LIMIT 1`);
+    out.shift = sh ? { id: sh.id, status: sh.status, opened_at: sh.opened_at, name: sh.name } : null;
+  }
   res.json(out);
 });
 
@@ -233,21 +222,26 @@ r.get('/notifications', (req, res) => {
         message: `«${p.name}» — الكمية الحالية ${p.quantity} ${p.unit} (حد إعادة الطلب ${p.min_stock})`, link: `/products/${p.id}` });
     }
   }
-  if (can(u, 'accounts.view')) {
-    const rows = all(`SELECT a.id, a.name, a.daily_limit, a.monthly_limit,
-      COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.account_id = a.id AND t.status != 'cancelled' AND date(t.created_at) = date('now','localtime')),0) AS d,
-      COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.account_id = a.id AND t.status != 'cancelled' AND strftime('%Y-%m', t.created_at) = strftime('%Y-%m','now','localtime')),0) AS m
-      FROM accounts a WHERE a.active = 1 AND (a.daily_limit IS NOT NULL OR a.monthly_limit IS NOT NULL)`);
-    for (const a of rows) {
-      for (const [lim, used, label] of [[a.daily_limit, a.d, 'اليومي'], [a.monthly_limit, a.m, 'الشهري']]) {
+  if (can(u, 'accounts.view') || can(u, 'balances.view')) {
+    for (const acc of all('SELECT * FROM accounts WHERE active = 1')) {
+      const a = accountView(acc, { withBalance: false });
+      for (const [lim, used, label] of [[a.effective_daily_limit, a.daily_used, 'اليومي'], [a.effective_monthly_limit, a.monthly_used, 'الشهري']]) {
         if (!lim) continue;
         const pct = Math.round((used / lim) * 100);
         if (pct >= warn) {
           items.push({ id: `limit-${a.id}-${label}`, type: 'account_limit', level: pct >= 100 ? 'danger' : 'warning',
             title: pct >= 100 ? `تم بلوغ الحد ${label}` : `اقتراب من الحد ${label}`,
-            message: `الحساب «${a.name}» استخدم ${pct}% من الحد ${label}`, link: `/accounts/${a.id}` });
+            message: `الحساب «${a.name}» استخدم ${pct}% من الحد ${label}`, link: `/balances/${a.id}` });
         }
       }
+    }
+  }
+  if (can(u, 'shifts.operate') || can(u, 'shifts.manage')) {
+    const p = one(`SELECT s.id, s.handover_to, ou.full_name AS from_name FROM shifts s LEFT JOIN users ou ON ou.id = s.opened_by
+      WHERE s.status = 'pending_handover' ORDER BY s.id DESC LIMIT 1`);
+    if (p && (p.handover_to === u.id || can(u, 'shifts.manage'))) {
+      items.push({ id: `shift-${p.id}`, type: 'shift_handover', level: 'warning', title: 'وردية بانتظار الاستلام',
+        message: `قام ${p.from_name || 'موظف'} بتسليم الوردية وتنتظر تأكيد الاستلام`, link: '/shifts' });
     }
   }
   if (can(u, 'transfers.view')) {
@@ -258,7 +252,7 @@ r.get('/notifications', (req, res) => {
     for (const s of all("SELECT id, date, difference FROM settlements WHERE status = 'pending' ORDER BY date DESC LIMIT 20")) {
       items.push({ id: `settlement-${s.id}`, type: 'settlement', level: s.difference !== 0 ? 'danger' : 'info',
         title: s.difference !== 0 ? 'فرق في التقفيل اليومي' : 'تقفيل بانتظار المراجعة',
-        message: s.difference !== 0 ? `تقفيل يوم ${s.date} به فرق ${toMajor(s.difference).toLocaleString('ar-EG')} ج.م` : `تقفيل يوم ${s.date} بانتظار الاعتماد`,
+        message: s.difference !== 0 ? `تقفيل يوم ${s.date} به فرق ${fmtAmount(s.difference)}` : `تقفيل يوم ${s.date} بانتظار الاعتماد`,
         link: `/settlements/${s.id}` });
     }
   }
@@ -266,8 +260,8 @@ r.get('/notifications', (req, res) => {
 });
 
 /* ───────── التقارير ───────── */
-const SERVICE_AR = { vodafone_cash: 'فودافون كاش', instapay: 'إنستاباي', mastercard: 'ماستركارد', wallet: 'محافظ أخرى' };
-const DIR_AR = { send: 'إرسال', receive: 'استلام / سحب', any: 'الكل' };
+const SERVICE_AR = { vodafone_cash: 'فودافون كاش', instapay: 'إنستاباي', mastercard: 'ماستركارد', visa_withdrawal: 'سحب فوري / سحب فيزا', wallet: 'محافظ أخرى' };
+const DIR_AR = { send: 'تحويل', receive: 'استلام / سحب', direct: 'تحويل مباشر للعميل', any: 'الكل' };
 const PAY_AR = { cash: 'نقدي', vodafone_cash: 'فودافون كاش', instapay: 'إنستاباي', mastercard: 'ماستركارد' };
 
 function range(q) {
@@ -387,15 +381,57 @@ const reports = {
     const p2 = [];
     if (q.service) { extra.push('a.service = ?'); p2.push(q.service); }
     const c = conds.join(' AND ');
-    const rows = all(`SELECT a.name, a.service, a.number, a.daily_limit, a.monthly_limit, a.active,
+    const rows = all(`SELECT a.*,
       (SELECT COUNT(*) FROM transfers t WHERE ${c}) AS count,
       (SELECT COALESCE(SUM(amount),0) FROM transfers t WHERE ${c}) AS amount,
       (SELECT COALESCE(SUM(commission),0) FROM transfers t WHERE ${c}) AS commission
       FROM accounts a ${extra.length ? 'WHERE ' + extra.join(' AND ') : ''} ORDER BY amount DESC`, ...params, ...params, ...params, ...p2);
     return {
       summary: [{ label: 'عدد الحسابات', value: rows.length, kind: 'number' }, { label: 'إجمالي المبالغ', value: M(rows.reduce((s, x) => s + x.amount, 0)), kind: 'money' }],
-      columns: [{ key: 'name', label: 'الحساب' }, { key: 'service', label: 'الخدمة' }, { key: 'number', label: 'الرقم' }, { key: 'daily_limit', label: 'الحد اليومي', kind: 'money' }, { key: 'monthly_limit', label: 'الحد الشهري', kind: 'money' }, { key: 'count', label: 'العمليات', kind: 'number' }, { key: 'amount', label: 'المبالغ', kind: 'money' }, { key: 'commission', label: 'العمولات', kind: 'money' }, { key: 'active', label: 'الحالة' }],
-      rows: rows.map((x) => ({ ...x, service: SERVICE_AR[x.service], daily_limit: x.daily_limit === null ? null : M(x.daily_limit), monthly_limit: x.monthly_limit === null ? null : M(x.monthly_limit), amount: M(x.amount), commission: M(x.commission), active: x.active ? 'نشط' : 'موقوف' })),
+      columns: [{ key: 'name', label: 'الحساب' }, { key: 'service', label: 'الخدمة' }, { key: 'number', label: 'الرقم' }, { key: 'count', label: 'العمليات', kind: 'number' }, { key: 'amount', label: 'المبالغ', kind: 'money' }, { key: 'commission', label: 'العمولات', kind: 'money' }, { key: 'active', label: 'الحالة' }],
+      rows: rows.map((x) => ({ name: x.name, service: SERVICE_AR[x.service], number: x.number, count: x.count, amount: M(x.amount), commission: M(x.commission), active: x.active ? 'نشط' : 'موقوف' })),
+    };
+  },
+  services(q) {
+    const extra = [["t.status != 'cancelled'"]];
+    const { w, params } = dateWhere('t.created_at', range(q), extra);
+    const rows = all(`SELECT t.service, t.direction, COUNT(*) AS count, SUM(t.amount) AS amount, SUM(t.commission) AS commission
+      FROM transfers t ${w} GROUP BY t.service, t.direction ORDER BY t.service, t.direction`, ...params);
+    return {
+      summary: [{ label: 'عدد العمليات', value: rows.reduce((s, x) => s + x.count, 0), kind: 'number' }, { label: 'إجمالي المبالغ', value: M(rows.reduce((s, x) => s + x.amount, 0)), kind: 'money' }, { label: 'إجمالي العمولات', value: M(rows.reduce((s, x) => s + x.commission, 0)), kind: 'money' }],
+      columns: [{ key: 'service', label: 'الخدمة' }, { key: 'direction', label: 'نوع العملية' }, { key: 'count', label: 'العدد', kind: 'number' }, { key: 'amount', label: 'المبالغ', kind: 'money' }, { key: 'commission', label: 'العمولات', kind: 'money' }],
+      rows: rows.map((x) => ({ service: SERVICE_AR[x.service], direction: DIR_AR[x.direction], count: x.count, amount: M(x.amount), commission: M(x.commission) })),
+    };
+  },
+  balances(q) {
+    const where = q.service ? 'WHERE service = ?' : '';
+    const rows = all(`SELECT * FROM accounts ${where} ORDER BY service, name`, ...(q.service ? [q.service] : [])).map((a) => accountView(a));
+    const set = rows.filter((x) => x.balance !== null);
+    return {
+      summary: [{ label: 'عدد الحسابات', value: rows.length, kind: 'number' }, { label: 'إجمالي أرصدة النظام', value: set.reduce((s, x) => s + x.balance, 0), kind: 'money', hint: 'للحسابات المحدد لها رصيد افتتاحي' }, { label: 'حسابات بدون رصيد افتتاحي', value: rows.length - set.length, kind: 'number' }],
+      columns: [{ key: 'name', label: 'الحساب' }, { key: 'service', label: 'الخدمة' }, { key: 'number', label: 'الرقم' }, { key: 'opening_balance', label: 'الرصيد الافتتاحي', kind: 'money' }, { key: 'opening_balance_at', label: 'تاريخ السريان' }, { key: 'balance', label: 'رصيد النظام الحالي', kind: 'money' }],
+      rows: rows.map((x) => ({ name: x.name, service: SERVICE_AR[x.service], number: x.number, opening_balance: x.opening_balance, opening_balance_at: x.opening_balance_at, balance: x.balance })),
+    };
+  },
+  limits(q) {
+    const where = q.service ? 'WHERE service = ?' : '';
+    const rows = all(`SELECT * FROM accounts ${where} ORDER BY service, name`, ...(q.service ? [q.service] : [])).map((a) => accountView(a, { withBalance: false }));
+    const pct = (u, l) => (l ? `\u2066${Math.round((u / l) * 100)}%\u2069` : '—');
+    return {
+      summary: [{ label: 'عدد الحسابات', value: rows.length, kind: 'number' }, { label: 'حسابات تجاوزت 80% من الحد اليومي', value: rows.filter((x) => x.effective_daily_limit && x.daily_used / x.effective_daily_limit >= 0.8).length, kind: 'number' }],
+      columns: [{ key: 'name', label: 'الحساب' }, { key: 'service', label: 'الخدمة' }, { key: 'daily_limit', label: 'الحد اليومي', kind: 'money' }, { key: 'daily_used', label: 'المستخدم اليوم', kind: 'money' }, { key: 'daily_pct', label: 'نسبة اليوم' }, { key: 'monthly_limit', label: 'الحد الشهري', kind: 'money' }, { key: 'monthly_used', label: 'المستخدم الشهر', kind: 'money' }, { key: 'monthly_pct', label: 'نسبة الشهر' }],
+      rows: rows.map((x) => ({ name: x.name, service: SERVICE_AR[x.service], daily_limit: x.effective_daily_limit, daily_used: x.daily_used, daily_pct: pct(x.daily_used, x.effective_daily_limit), monthly_limit: x.effective_monthly_limit, monthly_used: x.monthly_used, monthly_pct: pct(x.monthly_used, x.effective_monthly_limit) })),
+    };
+  },
+  shifts(q) {
+    const { w, params } = dateWhere('s.opened_at', range(q));
+    const ST = { open: 'مفتوحة', pending_handover: 'بانتظار الاستلام', closed: 'مغلقة' };
+    const rows = all(`SELECT s.*, ou.full_name AS opened_by_name, hu.full_name AS handover_name, ku.full_name AS confirmed_name FROM shifts s
+      LEFT JOIN users ou ON ou.id = s.opened_by LEFT JOIN users hu ON hu.id = s.handover_to LEFT JOIN users ku ON ku.id = s.handover_confirmed_by ${w} ORDER BY s.opened_at DESC`, ...params);
+    return {
+      summary: [{ label: 'عدد الورديات', value: rows.length, kind: 'number' }, { label: 'صافي فروقات النقدية', value: M(rows.reduce((s, x) => s + (x.cash_difference || 0), 0)), kind: 'money' }, { label: 'ورديات بها فروقات', value: rows.filter((x) => x.cash_difference).length, kind: 'number' }],
+      columns: [{ key: 'opened_by', label: 'الموظف' }, { key: 'opened_at', label: 'البداية' }, { key: 'closed_at', label: 'النهاية' }, { key: 'opening_cash', label: 'نقدية البداية', kind: 'money' }, { key: 'expected_cash', label: 'المتوقع', kind: 'money' }, { key: 'closing_cash', label: 'الفعلي', kind: 'money' }, { key: 'cash_difference', label: 'الفرق', kind: 'money' }, { key: 'handover', label: 'التسليم إلى' }, { key: 'status', label: 'الحالة' }],
+      rows: rows.map((x) => ({ opened_by: x.opened_by_name, opened_at: x.opened_at, closed_at: x.closed_at, opening_cash: M(x.opening_cash), expected_cash: x.expected_cash === null ? null : M(x.expected_cash), closing_cash: x.closing_cash === null ? null : M(x.closing_cash), cash_difference: x.cash_difference === null ? null : M(x.cash_difference), handover: x.handover_name ? `${x.handover_name}${x.confirmed_name ? ' (تم الاستلام)' : ''}` : null, status: ST[x.status] })),
     };
   },
 };

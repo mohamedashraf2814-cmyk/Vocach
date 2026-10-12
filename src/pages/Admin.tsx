@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   BarChart3, Download, Printer, ArrowLeftRight, Percent, Receipt, Package, Truck, Banknote, CalendarCheck, Landmark, ShieldCheck, Plus, Pencil, Power,
-  Trash2, History, Bell, AlertTriangle, AlertOctagon, Info, Settings as SettingsIcon, Save,
+  Trash2, History, Bell, AlertTriangle, AlertOctagon, Info, Settings as SettingsIcon, Save, Layers, Scale, SlidersHorizontal, UserCheck, LockKeyhole,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { CAN_DOWNLOAD, CAN_PRINT } from '../lib/env';
 import { useAuth } from '../lib/auth';
 import { useApi, useDebounced, useSubmit } from '../lib/hooks';
 import { fmtDate, fmtDateTime, fmtMoney, fmtNum, monthStartIso, todayIso } from '../lib/format';
-import { AUDIT_ACTIONS, AUDIT_ENTITIES, PAYMENT_METHODS, PERMISSION_GROUPS, SERVICE_KEYS, SERVICES, SETTLEMENT_STATUS } from '../lib/constants';
+import { AUDIT_ACTIONS, AUDIT_ENTITIES, DIRECTION_KEYS, DIRECTIONS, PAYMENT_METHODS, PERMISSION_GROUPS, SERVICE_KEYS, SERVICES, SETTLEMENT_STATUS } from '../lib/constants';
 import { Page, NotFoundPage, useNotifications } from '../components/Layout';
 import {
   Alert, AsyncView, Badge, Button, Card, ConfirmDialog, DataTable, Empty, Input, Modal, Pagination, Select, Stat, Textarea, useToast, type Column,
@@ -19,7 +19,11 @@ import type { Category } from './Sales';
 
 /* ───────── التقارير ───────── */
 const REPORTS = [
-  { key: 'transfers', title: 'تقرير التحويلات', icon: ArrowLeftRight, tone: 'indigo', filters: ['service', 'account', 'direction'] },
+  { key: 'transfers', title: 'التحويلات والسحب والإيداع', icon: ArrowLeftRight, tone: 'indigo', filters: ['service', 'account', 'direction'] },
+  { key: 'services', title: 'تقرير الخدمات', icon: Layers, tone: 'violet', filters: [] },
+  { key: 'balances', title: 'الأرصدة الحالية', icon: Scale, tone: 'emerald', filters: ['service'], noDates: true },
+  { key: 'limits', title: 'استخدام الحدود', icon: SlidersHorizontal, tone: 'navy', filters: ['service'], noDates: true },
+  { key: 'shifts', title: 'الورديات والتسليم', icon: UserCheck, tone: 'orange', filters: [] },
   { key: 'commissions', title: 'تقرير العمولات', icon: Percent, tone: 'green', filters: ['service', 'account'] },
   { key: 'sales', title: 'تقرير المبيعات', icon: Receipt, tone: 'cyan', filters: ['payment_method'] },
   { key: 'inventory', title: 'تقرير المخزون', icon: Package, tone: 'brown', filters: ['category', 'low'], noDates: true },
@@ -49,7 +53,7 @@ interface ReportData { summary: { label: string; value: number; kind: 'money' | 
 // تصدير CSV متوافق مع Excel (مع BOM لدعم العربية)
 function exportCsv(name: string, data: ReportData) {
   const esc = (v: unknown) => {
-    const s = v === null || v === undefined ? '' : String(v);
+    const s = v === null || v === undefined ? '' : String(v).replace(/[\u2066-\u2069]/g, '');
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [data.columns.map((c) => esc(c.label)).join(','), ...data.rows.map((r) => data.columns.map((c) => esc(r[c.key])).join(','))];
@@ -91,7 +95,7 @@ export function ReportPage() {
           {def.filters.includes('account') && <div className="field"><label htmlFor="ra">الحساب</label>
             <select id="ra" className="select" value={f.account_id} onChange={(e) => setF({ ...f, account_id: e.target.value })}><option value="">الكل</option>{accounts.data?.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>}
           {def.filters.includes('direction') && <div className="field"><label htmlFor="rd">النوع</label>
-            <select id="rd" className="select" value={f.direction} onChange={(e) => setF({ ...f, direction: e.target.value })}><option value="">الكل</option><option value="send">إرسال / إيداع</option><option value="receive">استلام / سحب</option></select></div>}
+            <select id="rd" className="select" value={f.direction} onChange={(e) => setF({ ...f, direction: e.target.value })}><option value="">الكل</option>{DIRECTION_KEYS.map((k) => <option key={k} value={k}>{DIRECTIONS[k].label}</option>)}</select></div>}
           {def.filters.includes('payment_method') && <div className="field"><label htmlFor="rp">طريقة الدفع</label>
             <select id="rp" className="select" value={f.payment_method} onChange={(e) => setF({ ...f, payment_method: e.target.value })}><option value="">الكل</option>{Object.entries(PAYMENT_METHODS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>}
           {def.filters.includes('category') && <div className="field"><label htmlFor="rc">التصنيف</label>
@@ -340,7 +344,7 @@ export function NotificationsPage() {
 /* ───────── الإعدادات ───────── */
 interface SettingsData {
   business_name?: string; business_phone?: string; business_address?: string; invoice_prefix: string; invoice_footer?: string; transfer_prefix: string;
-  enforce_account_limits: boolean; limit_warning_percent: number; allow_negative_stock: boolean; enabled_payment_methods: string[]; session_hours: number;
+  enforce_account_limits: boolean; enforce_account_balance: boolean; secure_unlock_minutes: number; limit_warning_percent: number; allow_negative_stock: boolean; enabled_payment_methods: string[]; session_hours: number;
 }
 
 export function SettingsPage() {
@@ -354,7 +358,7 @@ export function SettingsPage() {
     if (!f) return;
     const r = await s.run(() => api.put<SettingsData>('/settings', {
       business_name: f.business_name || '', business_phone: f.business_phone || '', business_address: f.business_address || '', invoice_prefix: f.invoice_prefix,
-      invoice_footer: f.invoice_footer || '', transfer_prefix: f.transfer_prefix, enforce_account_limits: f.enforce_account_limits, limit_warning_percent: Number(f.limit_warning_percent),
+      invoice_footer: f.invoice_footer || '', transfer_prefix: f.transfer_prefix, enforce_account_limits: f.enforce_account_limits, enforce_account_balance: f.enforce_account_balance, secure_unlock_minutes: Number(f.secure_unlock_minutes), limit_warning_percent: Number(f.limit_warning_percent),
       allow_negative_stock: f.allow_negative_stock, enabled_payment_methods: f.enabled_payment_methods, session_hours: Number(f.session_hours),
     }));
     if (r) { setF(r); setBusinessName(r.business_name || null); toast('تم حفظ الإعدادات'); }
@@ -396,13 +400,15 @@ export function SettingsPage() {
             <Card title="الخدمات المالية">
               <div className="grid-2">
                 <label className="check span-2"><input type="checkbox" checked={v.enforce_account_limits} onChange={(e) => setF({ ...v, enforce_account_limits: e.target.checked })} />منع تسجيل العمليات التي تتجاوز الحد اليومي أو الشهري للحساب</label>
+                <label className="check span-2"><input type="checkbox" checked={v.enforce_account_balance} onChange={(e) => setF({ ...v, enforce_account_balance: e.target.checked })} />منع التحويل من حساب بمبلغ أكبر من رصيده في النظام (للحسابات المحدد لها رصيد افتتاحي)</label>
                 <Input label="نسبة التنبيه عند الاقتراب من الحد (%)" type="number" min={1} max={100} dir="ltr" value={v.limit_warning_percent} error={s.fieldErrors.limit_warning_percent} onChange={(e) => setF({ ...v, limit_warning_percent: Number(e.target.value) })} />
               </div>
-              <p className="small muted mt-1">لإدارة قواعد العمولة انتقل إلى <Link to="/commissions">صفحة العمولات</Link>، وللحسابات والحدود إلى <Link to="/accounts">صفحة الحسابات</Link>.</p>
+              <p className="small muted mt-1">نسب العمولة في <Link to="/commissions">العمولات</Link>، وحدود الخدمات في <Link to="/rules">القواعد والحدود</Link>، والأرصدة في <Link to="/balances">الرصيد الحالي</Link>.</p>
             </Card>
             <Card title="الأمان">
               <div className="grid-2">
                 <Input label="مدة الجلسة (بالساعات)" type="number" min={1} max={720} dir="ltr" value={v.session_hours} error={s.fieldErrors.session_hours} onChange={(e) => setF({ ...v, session_hours: Number(e.target.value) })} hint="تُطبق على عمليات تسجيل الدخول الجديدة" />
+                <Input label="مدة فتح الشاشات المحمية (بالدقائق)" type="number" min={1} max={240} dir="ltr" value={v.secure_unlock_minutes} error={s.fieldErrors.secure_unlock_minutes} onChange={(e) => setF({ ...v, secure_unlock_minutes: Number(e.target.value) })} hint="بعدها يُطلب رمز الحماية مرة أخرى" />
               </div>
               <p className="small muted mt-1">لإدارة المستخدمين والأدوار انتقل إلى <Link to="/users">المستخدمون والصلاحيات</Link>.</p>
             </Card>
@@ -410,6 +416,39 @@ export function SettingsPage() {
           </form>
         )}
       </AsyncView>
+      <SecurePinCard />
     </Page>
+  );
+}
+
+// رمز حماية شاشتي العمولات والقواعد: يُحفظ مشفراً في الخادم ولا يظهر في الواجهة
+function SecurePinCard() {
+  const status = useApi(() => api.get<{ configured: boolean }>('/secure/status'), []);
+  const [f, setF] = useState({ pin: '', confirm: '', password: '' });
+  const s = useSubmit();
+  const toast = useToast();
+  const save = async (remove: boolean) => {
+    if (!remove && f.pin !== f.confirm) { s.setError('رمزا الحماية غير متطابقين'); return; }
+    const r = await s.run(() => api.put('/secure/pin', { pin: remove ? null : f.pin, password: f.password }));
+    if (r) { toast(remove ? 'تم إلغاء رمز الحماية' : 'تم حفظ رمز الحماية'); setF({ pin: '', confirm: '', password: '' }); status.reload(); }
+  };
+  return (
+    <section id="security" className="card mt-2">
+      <div className="card-header"><h2 className="row"><LockKeyhole size={18} />رمز حماية العمولات والقواعد</h2>{status.data && (status.data.configured ? <Badge tone="success">مفعّل</Badge> : <Badge tone="warning">غير مفعّل</Badge>)}</div>
+      <form className="card-body stack" onSubmit={(e) => { e.preventDefault(); save(false); }} noValidate>
+        <p className="small muted" style={{ margin: 0 }}>عند تفعيله، يُطلب هذا الرمز عند فتح شاشتي «العمولات» و«القواعد والحدود»، ويتحقق منه الخادم. لا يمكن عرض الرمز بعد حفظه.</p>
+        <div className="grid-3">
+          <Input label={status.data?.configured ? 'الرمز الجديد' : 'رمز الحماية'} type="password" inputMode="numeric" autoComplete="new-password" dir="ltr" hint="من 4 إلى 12 رقماً"
+            value={f.pin} error={s.fieldErrors.pin} onChange={(e) => setF({ ...f, pin: e.target.value.replace(/\D/g, '') })} />
+          <Input label="تأكيد الرمز" type="password" inputMode="numeric" autoComplete="new-password" dir="ltr" value={f.confirm} onChange={(e) => setF({ ...f, confirm: e.target.value.replace(/\D/g, '') })} />
+          <Input label="كلمة مرور حسابك" type="password" autoComplete="current-password" required value={f.password} error={s.fieldErrors.password} onChange={(e) => setF({ ...f, password: e.target.value })} hint="للتأكيد" />
+        </div>
+        {s.error && <Alert>{s.error}</Alert>}
+        <div className="form-actions">
+          <Button type="submit" variant="primary" loading={s.busy}>{status.data?.configured ? 'تغيير الرمز' : 'تفعيل الرمز'}</Button>
+          {status.data?.configured && <Button variant="danger-outline" disabled={s.busy || !f.password} onClick={() => save(true)}>إلغاء الحماية</Button>}
+        </div>
+      </form>
+    </section>
   );
 }

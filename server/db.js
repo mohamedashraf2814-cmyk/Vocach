@@ -206,6 +206,120 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `);
 
+/* ───────── ترحيلات آمنة (تُطبق مرة واحدة ولا تحذف أي بيانات) ───────── */
+const columns = (table) => db.prepare(`PRAGMA table_info(${table})`).all();
+const hasColumn = (table, col) => columns(table).some((c) => c.name === col);
+function addColumn(table, col, def) {
+  if (!hasColumn(table, col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+}
+
+// الرصيد الافتتاحي لكل حساب: مبلغ صريح وتاريخ سريان، لا يُستنتج من العمليات
+addColumn('accounts', 'opening_balance', 'INTEGER');
+addColumn('accounts', 'opening_balance_at', 'TEXT');
+// نسبة العمولة والقاعدة المستخدمة وقت تسجيل العملية (لا تتغير عند تعديل القواعد لاحقاً)
+addColumn('transfers', 'commission_rate', 'REAL');
+addColumn('transfers', 'commission_rule_id', 'INTEGER');
+addColumn('transfers', 'commission_source', "TEXT");
+// مفتاح يرسله المتصفح مع كل عملية لمنع تسجيلها مرتين
+addColumn('transfers', 'client_ref', 'TEXT');
+// فتح شاشات العمولات والقواعد برمز الحماية لمدة محدودة داخل الجلسة
+addColumn('sessions', 'secure_until', 'INTEGER');
+
+// التحويل المباشر للعميل لا يستخدم حساباً للمحل: نجعل account_id اختيارياً بإعادة بناء الجدول
+if (columns('transfers').find((c) => c.name === 'account_id')?.notnull) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const cols = columns('transfers').map((c) => c.name).join(', ');
+    db.exec(`
+      CREATE TABLE transfers_new (
+        id INTEGER PRIMARY KEY,
+        ref TEXT NOT NULL UNIQUE,
+        service TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        account_id INTEGER REFERENCES accounts(id),
+        amount INTEGER NOT NULL,
+        commission INTEGER NOT NULL DEFAULT 0,
+        recipient TEXT,
+        customer_id INTEGER REFERENCES customers(id),
+        notes TEXT,
+        receipt TEXT,
+        status TEXT NOT NULL DEFAULT 'completed',
+        user_id INTEGER REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        commission_rate REAL,
+        commission_rule_id INTEGER,
+        commission_source TEXT,
+        client_ref TEXT
+      );
+      INSERT INTO transfers_new (${cols}) SELECT ${cols} FROM transfers;
+      DROP TABLE transfers;
+      ALTER TABLE transfers_new RENAME TO transfers;
+    `);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_transfers_created ON transfers(created_at);
+CREATE INDEX IF NOT EXISTS idx_transfers_account ON transfers(account_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transfers_client_ref ON transfers(client_ref) WHERE client_ref IS NOT NULL;
+
+-- حركات رصيد الحساب غير المرتبطة بعمليات العملاء (تغذية رصيد، سحب منه، تصحيح)
+CREATE TABLE IF NOT EXISTS account_adjustments (
+  id INTEGER PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  type TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  note TEXT,
+  user_id INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_adjustments_account ON account_adjustments(account_id);
+
+-- قواعد الحدود لكل خدمة: الحد الافتراضي للحسابات، وأنواع العمليات التي تُحتسب في الحد
+CREATE TABLE IF NOT EXISTS service_rules (
+  service TEXT PRIMARY KEY,
+  daily_limit INTEGER,
+  monthly_limit INTEGER,
+  count_send INTEGER NOT NULL DEFAULT 1,
+  count_receive INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+-- ورديات الموظفين والتسليم والاستلام
+CREATE TABLE IF NOT EXISTS shifts (
+  id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'open',
+  opened_by INTEGER NOT NULL REFERENCES users(id),
+  opened_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  opening_cash INTEGER NOT NULL,
+  opening_snapshot TEXT,
+  opening_note TEXT,
+  closed_by INTEGER REFERENCES users(id),
+  closed_at TEXT,
+  closing_cash INTEGER,
+  expected_cash INTEGER,
+  cash_difference INTEGER,
+  closing_snapshot TEXT,
+  summary TEXT,
+  closing_note TEXT,
+  handover_to INTEGER REFERENCES users(id),
+  handover_confirmed_by INTEGER REFERENCES users(id),
+  handover_confirmed_at TEXT,
+  handover_note TEXT,
+  previous_shift_id INTEGER REFERENCES shifts(id)
+);
+CREATE INDEX IF NOT EXISTS idx_shifts_status ON shifts(status);
+`);
+// حدود الوردية بأرقام السجلات (أدق من التوقيت عند تسجيل عمليات في نفس الثانية)
+addColumn('shifts', 'start_marks', 'TEXT');
+addColumn('shifts', 'end_marks', 'TEXT');
+
 export function tx(fn) {
   db.exec('BEGIN IMMEDIATE');
   try {

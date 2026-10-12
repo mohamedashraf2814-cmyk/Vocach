@@ -11,6 +11,8 @@ services:
         value: 22.13.0
       - key: DATA_DIR
         value: /var/data
+      - key: TZ
+        value: Africa/Cairo
       - key: TRUST_PROXY
         value: "1"
     disk:

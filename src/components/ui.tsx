@@ -1,5 +1,5 @@
 import {
-  createContext, useCallback, useContext, useEffect, useId, useRef, useState,
+  createContext, forwardRef, useCallback, useContext, useEffect, useId, useRef, useState,
   type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes,
 } from 'react';
 import {
@@ -45,19 +45,19 @@ export function Field({ label, required, hint, error, children, className = '', 
 }
 
 type InputProps = InputHTMLAttributes<HTMLInputElement> & { label?: ReactNode; hint?: ReactNode; error?: string | null; wrapClass?: string; inputClass?: string };
-export function Input({ label, hint, error, required, wrapClass, inputClass = '', id, ...rest }: InputProps) {
+export const Input = forwardRef<HTMLInputElement, InputProps>(function Input({ label, hint, error, required, wrapClass, inputClass = '', id, ...rest }, ref) {
   const auto = useId();
   const fid = id || auto;
   return (
     <Field label={label} required={required} hint={hint} error={error} className={wrapClass} htmlFor={fid}>
-      <input id={fid} className={`input ${inputClass}`} required={required} aria-invalid={error ? true : undefined} {...rest} />
+      <input id={fid} ref={ref} className={`input ${inputClass}`} required={required} aria-invalid={error ? true : undefined} {...rest} />
     </Field>
   );
-}
+});
 
-export function MoneyInput(props: InputProps) {
-  return <Input type="number" inputMode="decimal" step="0.01" min="0" dir="ltr" {...props} />;
-}
+export const MoneyInput = forwardRef<HTMLInputElement, InputProps>(function MoneyInput(props, ref) {
+  return <Input ref={ref} type="number" inputMode="decimal" step="0.01" min="0" dir="ltr" {...props} />;
+});
 
 type SelectProps = SelectHTMLAttributes<HTMLSelectElement> & { label?: ReactNode; hint?: ReactNode; error?: string | null; wrapClass?: string };
 export function Select({ label, hint, error, required, wrapClass, id, children, ...rest }: SelectProps) {

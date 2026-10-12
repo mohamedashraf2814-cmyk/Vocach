@@ -1,5 +1,8 @@
-const moneyFmt = new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const numFmt = new Intl.NumberFormat('ar-EG');
+// نص عربي مع أرقام إنجليزية (0-9) في كل المبالغ والأرقام والتواريخ
+export const LOCALE = 'ar-EG-u-nu-latn';
+
+const moneyFmt = new Intl.NumberFormat(LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const numFmt = new Intl.NumberFormat(LOCALE);
 
 export const fmtMoney = (v: number | null | undefined) => (v === null || v === undefined || Number.isNaN(v) ? '—' : `${moneyFmt.format(v)} ج.م`);
 export const fmtNum = (v: number | null | undefined) => (v === null || v === undefined ? '—' : numFmt.format(v));
@@ -15,14 +18,14 @@ export function fmtDateTime(v?: string | null) {
   if (!v) return '—';
   const d = parse(v);
   if (!d) return v;
-  return d.toLocaleString('ar-EG', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString(LOCALE, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 export function fmtDate(v?: string | null) {
   if (!v) return '—';
   const d = parse(v.length === 10 ? `${v}T00:00:00` : v);
   if (!d) return v;
-  return d.toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' });
+  return d.toLocaleDateString(LOCALE, { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
 export function todayIso() {
@@ -37,7 +40,8 @@ export function monthStartIso() {
 
 export const round2 = (n: number) => Math.round(n * 100) / 100;
 
-const pctFmt = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 });
+const pctFmt = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 2 });
 // نسبة العمولة من المبلغ
 export const pctOf = (part: number, whole: number) => (whole > 0 ? (part / whole) * 100 : 0);
-export const fmtPct = (v: number | null | undefined) => (v === null || v === undefined || Number.isNaN(v) ? '—' : `${pctFmt.format(v)}٪`);
+// عزل اتجاه النسبة (LTR) حتى تظهر «1%» صحيحة داخل النص العربي
+export const fmtPct = (v: number | null | undefined) => (v === null || v === undefined || Number.isNaN(v) ? '—' : `\u2066${pctFmt.format(v)}%\u2069`);

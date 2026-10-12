@@ -17,6 +17,8 @@ export const notFound = (message = 'العنصر المطلوب غير موجو�
 // تحويل المبالغ بين الجنيه (واجهة API) والقرش (قاعدة البيانات)
 export const toMinor = (v) => Math.round(Number(v) * 100);
 export const toMajor = (v) => (v === null || v === undefined ? null : Number(v) / 100);
+// تنسيق المبالغ بالأرقام الإنجليزية (0-9) في رسائل الخادم
+export const fmtAmount = (minor) => `${(Number(minor) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م`;
 
 export function mapMoney(row, fields) {
   if (!row) return row;

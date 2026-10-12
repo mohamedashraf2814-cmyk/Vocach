@@ -2,54 +2,48 @@ import { Router } from 'express';
 import { all, one, run, tx } from '../db.js';
 import {
   asyncRoute, audit, bad, int, mapMoney, money, notFound, oneOf, paging, saveDataUrl, str, toMajor,
-  isDate, likeParam,
+  isDate, likeParam, HttpError, fmtAmount,
 } from '../util.js';
-import { can, requirePerm, getSettings } from '../auth.js';
-import { DIRECTIONS, SERVICES, TRANSFER_STATUSES } from '../constants.js';
+import { can, requirePerm, requireSecure, getSettings } from '../auth.js';
+import { ADJUSTMENT_TYPES, DIRECTIONS, SERVICES, TRANSFER_STATUSES } from '../constants.js';
+import { accountView, balanceOf, effectiveLimits, ledger, nowLocal, serviceRule, usage } from '../ledger.js';
 
 const r = Router();
 
-/* ───────── الحسابات والحدود ───────── */
-const ACCOUNT_MONEY = ['daily_limit', 'monthly_limit', 'daily_used', 'monthly_used', 'total_amount', 'total_commission'];
-
-export function accountUsage(accountId) {
-  return one(`SELECT
-      COALESCE(SUM(CASE WHEN date(created_at) = date('now','localtime') THEN amount END), 0) AS daily_used,
-      COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now','localtime') THEN amount END), 0) AS monthly_used
-    FROM transfers WHERE account_id = ? AND status != 'cancelled'`, accountId);
+/* ───────── الحسابات والأرصدة والحدود ───────── */
+// الحسابات تُعرض عبر accountView في ledger.js (المصدر الوحيد للأرصدة والحدود)
+function loadAccounts(where, params) {
+  return all(`SELECT a.*, (SELECT COUNT(*) FROM transfers t WHERE t.account_id = a.id) AS transfers_count FROM accounts a
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY a.active DESC, a.name`, ...params);
 }
 
-const ACCOUNT_SELECT = `SELECT a.*,
-  COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.account_id = a.id AND t.status != 'cancelled' AND date(t.created_at) = date('now','localtime')), 0) AS daily_used,
-  COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.account_id = a.id AND t.status != 'cancelled' AND strftime('%Y-%m', t.created_at) = strftime('%Y-%m','now','localtime')), 0) AS monthly_used,
-  (SELECT COUNT(*) FROM transfers t WHERE t.account_id = a.id) AS transfers_count
-  FROM accounts a`;
-
-function mapAccount(a) {
-  const m = mapMoney(a, ACCOUNT_MONEY);
-  m.active = !!a.active;
-  m.daily_remaining = a.daily_limit === null ? null : toMajor(Math.max(0, a.daily_limit - a.daily_used));
-  m.monthly_remaining = a.monthly_limit === null ? null : toMajor(Math.max(0, a.monthly_limit - a.monthly_used));
-  return m;
-}
-
-r.get('/accounts', requirePerm('accounts.view', 'transfers.create', 'transfers.view'), (req, res) => {
+r.get('/accounts', requirePerm('accounts.view', 'balances.view', 'transfers.create', 'transfers.view'), (req, res) => {
   const where = [];
   const params = [];
   if (req.query.service) { where.push('a.service = ?'); params.push(String(req.query.service)); }
   if (req.query.active === '1') where.push('a.active = 1');
   if (req.query.active === '0') where.push('a.active = 0');
   if (req.query.q) { where.push("(a.name LIKE ? ESCAPE '\\' OR a.number LIKE ? ESCAPE '\\' OR a.owner LIKE ? ESCAPE '\\')"); const q = likeParam(req.query.q); params.push(q, q, q); }
-  const rows = all(`${ACCOUNT_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY a.active DESC, a.name`, ...params);
-  res.json(rows.map(mapAccount));
+  const withBalance = can(req.user, 'balances.view');
+  res.json(loadAccounts(where, params).map((a) => accountView(a, { withBalance })));
 });
 
-r.get('/accounts/:id', requirePerm('accounts.view'), asyncRoute((req, res) => {
-  const a = one(`${ACCOUNT_SELECT} WHERE a.id = ?`, Number(req.params.id));
+r.get('/accounts/:id', requirePerm('accounts.view', 'balances.view'), asyncRoute((req, res) => {
+  const a = one('SELECT a.*, (SELECT COUNT(*) FROM transfers t WHERE t.account_id = a.id) AS transfers_count FROM accounts a WHERE a.id = ?', Number(req.params.id));
   if (!a) throw notFound('الحساب غير موجود');
   const totals = one(`SELECT COALESCE(SUM(amount),0) AS total_amount, COALESCE(SUM(commission),0) AS total_commission
     FROM transfers WHERE account_id = ? AND status != 'cancelled'`, a.id);
-  res.json({ ...mapAccount(a), ...mapMoney(totals, ACCOUNT_MONEY) });
+  res.json({ ...accountView(a, { withBalance: can(req.user, 'balances.view') }), ...mapMoney(totals, ['total_amount', 'total_commission']) });
+}));
+
+// كشف حركة الحساب مع الرصيد بعد كل حركة
+r.get('/accounts/:id/ledger', requirePerm('balances.view'), asyncRoute((req, res) => {
+  const a = one('SELECT * FROM accounts WHERE id = ?', Number(req.params.id));
+  if (!a) throw notFound('الحساب غير موجود');
+  const rows = ledger(a);
+  if (!rows) return res.json({ opening_set: false, items: [], total: 0, page: 1, pageSize: 50 });
+  const { page, pageSize, offset } = paging(req.query, { defaultSize: 50 });
+  res.json({ opening_set: true, items: rows.slice(offset, offset + pageSize), total: rows.length, page, pageSize });
 }));
 
 function accountBody(body) {
@@ -64,22 +58,77 @@ function accountBody(body) {
   };
 }
 
+// تاريخ سريان الرصيد الافتتاحي: تاريخ (بداية اليوم) أو تاريخ ووقت محليين
+function openingAt(body) {
+  const v = String(body?.opening_balance_at || '').trim();
+  if (!v) return nowLocal();
+  if (isDate(v)) return `${v} 00:00:00`;
+  const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(:\d{2})?$/.exec(v);
+  if (!m || Number.isNaN(Date.parse(`${m[1]}T${m[2]}`))) throw bad('تاريخ سريان الرصيد الافتتاحي غير صحيح', { opening_balance_at: 'غير صالح' });
+  return `${m[1]} ${m[2]}${m[3] || ':00'}`;
+}
+
 r.post('/accounts', requirePerm('accounts.manage'), asyncRoute((req, res) => {
   const b = accountBody(req.body);
-  const rr = run('INSERT INTO accounts (name, service, number, owner, daily_limit, monthly_limit, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    b.name, b.service, b.number, b.owner, b.daily_limit, b.monthly_limit, b.notes);
-  audit(req, 'create', 'account', rr.lastInsertRowid, { name: b.name, service: b.service });
+  const opening = money(req.body, 'opening_balance', { label: 'الرصيد الافتتاحي', min: -1e9 });
+  if (opening !== null && !can(req.user, 'balances.manage')) throw new HttpError(403, 'ليست لديك صلاحية تحديد الرصيد الافتتاحي');
+  const at = opening !== null ? openingAt(req.body) : null;
+  const rr = run('INSERT INTO accounts (name, service, number, owner, daily_limit, monthly_limit, notes, opening_balance, opening_balance_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    b.name, b.service, b.number, b.owner, b.daily_limit, b.monthly_limit, b.notes, opening, at);
+  audit(req, 'create', 'account', rr.lastInsertRowid, { name: b.name, service: b.service, opening_balance: toMajor(opening), opening_balance_at: at });
   res.status(201).json({ id: Number(rr.lastInsertRowid) });
 }));
 
 r.put('/accounts/:id', requirePerm('accounts.manage'), asyncRoute((req, res) => {
   const id = Number(req.params.id);
-  if (!one('SELECT id FROM accounts WHERE id = ?', id)) throw notFound('الحساب غير موجود');
+  const cur = one('SELECT * FROM accounts WHERE id = ?', id);
+  if (!cur) throw notFound('الحساب غير موجود');
   const b = accountBody(req.body);
+  if (b.service !== cur.service && one('SELECT COUNT(*) AS c FROM transfers WHERE account_id = ?', id).c > 0) {
+    throw bad('لا يمكن تغيير خدمة حساب مسجل عليه عمليات', { service: 'غير مسموح' });
+  }
   run('UPDATE accounts SET name = ?, service = ?, number = ?, owner = ?, daily_limit = ?, monthly_limit = ?, notes = ? WHERE id = ?',
     b.name, b.service, b.number, b.owner, b.daily_limit, b.monthly_limit, b.notes, id);
-  audit(req, 'update', 'account', id, { name: b.name });
+  audit(req, 'update', 'account', id, {
+    name: b.name,
+    limits: { daily: [toMajor(cur.daily_limit), toMajor(b.daily_limit)], monthly: [toMajor(cur.monthly_limit), toMajor(b.monthly_limit)] },
+  });
   res.json({ ok: true });
+}));
+
+// تحديد الرصيد الافتتاحي: مرة واحدة، وتغييره يتطلب تأكيداً صريحاً ويُسجل في سجل النشاط
+r.put('/accounts/:id/opening-balance', requirePerm('balances.manage'), asyncRoute((req, res) => {
+  const id = Number(req.params.id);
+  const cur = one('SELECT * FROM accounts WHERE id = ?', id);
+  if (!cur) throw notFound('الحساب غير موجود');
+  const amount = money(req.body, 'opening_balance', { required: true, label: 'الرصيد الافتتاحي', min: -1e9 });
+  const at = openingAt(req.body);
+  if (cur.opening_balance !== null && req.body?.replace !== true) {
+    throw new HttpError(409, 'تم تحديد رصيد افتتاحي لهذا الحساب مسبقاً. لتغييره يجب تأكيد الاستبدال');
+  }
+  if (cur.opening_balance === amount && cur.opening_balance_at === at) throw bad('لا يوجد تغيير في الرصيد الافتتاحي');
+  run('UPDATE accounts SET opening_balance = ?, opening_balance_at = ? WHERE id = ?', amount, at, id);
+  audit(req, cur.opening_balance === null ? 'opening_balance_set' : 'opening_balance_change', 'account', id, {
+    before: cur.opening_balance === null ? null : { amount: toMajor(cur.opening_balance), at: cur.opening_balance_at },
+    after: { amount: toMajor(amount), at },
+    reason: str(req.body, 'reason', { max: 300, label: 'السبب' }),
+  });
+  res.json({ ok: true });
+}));
+
+// حركات رصيد يدوية: تغذية الحساب، سحب منه، أو تصحيح بعد مطابقة الرصيد الفعلي
+r.post('/accounts/:id/adjustments', requirePerm('balances.manage'), asyncRoute((req, res) => {
+  const id = Number(req.params.id);
+  const acc = one('SELECT * FROM accounts WHERE id = ?', id);
+  if (!acc) throw notFound('الحساب غير موجود');
+  if (acc.opening_balance === null) throw bad('حدد الرصيد الافتتاحي للحساب أولاً');
+  const type = oneOf(req.body, 'type', ADJUSTMENT_TYPES, { label: 'نوع الحركة' });
+  const raw = money(req.body, 'amount', { required: true, label: 'المبلغ', min: type === 'correction' ? -1e9 : 0, allowZero: false });
+  const amount = type === 'withdraw' ? -Math.abs(raw) : type === 'deposit' ? Math.abs(raw) : raw;
+  const note = str(req.body, 'note', { max: 300, label: 'السبب', required: type === 'correction' });
+  const rr = run('INSERT INTO account_adjustments (account_id, type, amount, note, user_id) VALUES (?, ?, ?, ?, ?)', id, type, amount, note, req.user.id);
+  audit(req, 'balance_adjustment', 'account', id, { type, amount: toMajor(amount), note, adjustment_id: Number(rr.lastInsertRowid) });
+  res.status(201).json({ id: Number(rr.lastInsertRowid), balance: toMajor(balanceOf(acc).balance) });
 }));
 
 r.patch('/accounts/:id/status', requirePerm('accounts.manage'), asyncRoute((req, res) => {
@@ -115,7 +164,7 @@ export function calcCommission(rule, amountMinor) {
   return c;
 }
 
-r.get('/commissions', requirePerm('commissions.view', 'transfers.create'), (_req, res) => {
+r.get('/commissions', requirePerm('commissions.view'), requireSecure, (_req, res) => {
   res.json(all('SELECT * FROM commission_rules ORDER BY service, direction, min_amount').map(mapRule));
 });
 
@@ -149,7 +198,7 @@ function ruleBody(body) {
   return b;
 }
 
-r.post('/commissions', requirePerm('commissions.manage'), asyncRoute((req, res) => {
+r.post('/commissions', requirePerm('commissions.manage'), requireSecure, asyncRoute((req, res) => {
   const b = ruleBody(req.body);
   const rr = run(`INSERT INTO commission_rules (service, direction, calc_type, value, min_amount, max_amount, min_commission, max_commission, notes, active)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, b.service, b.direction, b.calc_type, b.value, b.min_amount, b.max_amount, b.min_commission, b.max_commission, b.notes, b.active);
@@ -157,7 +206,7 @@ r.post('/commissions', requirePerm('commissions.manage'), asyncRoute((req, res) 
   res.status(201).json({ id: Number(rr.lastInsertRowid) });
 }));
 
-r.put('/commissions/:id', requirePerm('commissions.manage'), asyncRoute((req, res) => {
+r.put('/commissions/:id', requirePerm('commissions.manage'), requireSecure, asyncRoute((req, res) => {
   const id = Number(req.params.id);
   if (!one('SELECT id FROM commission_rules WHERE id = ?', id)) throw notFound('قاعدة العمولة غير موجودة');
   const b = ruleBody(req.body);
@@ -168,7 +217,7 @@ r.put('/commissions/:id', requirePerm('commissions.manage'), asyncRoute((req, re
   res.json({ ok: true });
 }));
 
-r.delete('/commissions/:id', requirePerm('commissions.manage'), asyncRoute((req, res) => {
+r.delete('/commissions/:id', requirePerm('commissions.manage'), requireSecure, asyncRoute((req, res) => {
   const id = Number(req.params.id);
   if (!one('SELECT id FROM commission_rules WHERE id = ?', id)) throw notFound('قاعدة العمولة غير موجودة');
   run('DELETE FROM commission_rules WHERE id = ?', id);
@@ -178,9 +227,10 @@ r.delete('/commissions/:id', requirePerm('commissions.manage'), asyncRoute((req,
 
 /* ───────── التحويلات ───────── */
 const TRANSFER_MONEY = ['amount', 'commission'];
+// LEFT JOIN لأن التحويل المباشر للعميل لا يرتبط بحساب للمحل
 const TRANSFER_SELECT = `SELECT t.*, a.name AS account_name, a.number AS account_number, c.name AS customer_name, c.phone AS customer_phone,
   u.full_name AS user_name FROM transfers t
-  JOIN accounts a ON a.id = t.account_id
+  LEFT JOIN accounts a ON a.id = t.account_id
   LEFT JOIN customers c ON c.id = t.customer_id
   LEFT JOIN users u ON u.id = t.user_id`;
 
@@ -207,12 +257,13 @@ const SORTS = { created_at: 't.created_at', amount: 't.amount', commission: 't.c
 r.get('/transfers', requirePerm('transfers.view'), (req, res) => {
   const { page, pageSize, offset } = paging(req.query);
   const { w, params } = transferFilters(req.query);
-  const sort = SORTS[req.query.sort] || 't.id';
+  const sort = SORTS[req.query.sort] || 't.created_at';
   const dir = req.query.order === 'asc' ? 'ASC' : 'DESC';
   const total = one(`SELECT COUNT(*) AS c FROM transfers t ${w}`, ...params).c;
   const sums = one(`SELECT COALESCE(SUM(t.amount),0) AS amount, COALESCE(SUM(t.commission),0) AS commission, COUNT(*) AS count
     FROM transfers t ${w ? w + " AND t.status != 'cancelled'" : "WHERE t.status != 'cancelled'"}`, ...params);
-  const items = all(`${TRANSFER_SELECT} ${w} ORDER BY ${sort} ${dir}, t.id DESC LIMIT ? OFFSET ?`, ...params, pageSize, offset)
+  // الأحدث أولاً افتراضياً، مع رقم العملية كمفتاح ترتيب ثانٍ ثابت عند تساوي الوقت
+  const items = all(`${TRANSFER_SELECT} ${w} ORDER BY ${sort} ${dir}, t.id ${dir} LIMIT ? OFFSET ?`, ...params, pageSize, offset)
     .map((x) => mapMoney(x, TRANSFER_MONEY));
   res.json({ items, total, page, pageSize, summary: { ...mapMoney(sums, TRANSFER_MONEY) } });
 });
@@ -225,53 +276,82 @@ r.get('/transfers/:id', requirePerm('transfers.view'), asyncRoute((req, res) => 
 
 r.post('/transfers', requirePerm('transfers.create'), asyncRoute((req, res) => {
   const body = req.body || {};
+  const settings = getSettings();
   const service = oneOf(body, 'service', SERVICES, { label: 'نوع الخدمة' });
   const direction = oneOf(body, 'direction', DIRECTIONS, { label: 'نوع العملية' });
-  const accountId = int(body, 'account_id', { required: true, min: 1, label: 'الحساب' });
+  // التحويل المباشر للعميل لا يستخدم حساباً للمحل، أما التحويل والاستلام فيتطلبان الحساب
+  const usesAccount = direction !== 'direct';
+  const accountId = usesAccount ? int(body, 'account_id', { required: true, min: 1, label: 'الحساب' }) : null;
   const amount = money(body, 'amount', { required: true, label: 'المبلغ', allowZero: false });
-  const recipient = str(body, 'recipient', { max: 60, label: 'رقم المستلم' });
+  const recipient = str(body, 'recipient', { max: 60, label: 'رقم المستلم', required: direction === 'direct' });
   if (recipient && !/^[\d+\s-]{4,30}$/.test(recipient) && service !== 'instapay') {
     throw bad('رقم المستلم غير صالح', { recipient: 'غير صالح' });
   }
   const customerId = int(body, 'customer_id', { min: 1, label: 'العميل' });
   const notes = str(body, 'notes', { max: 500, label: 'ملاحظات' });
   const status = body.status === 'pending' ? 'pending' : 'completed';
+  const clientRef = body.client_ref ? String(body.client_ref).slice(0, 64) : null;
   let overridePct = null;
   if (body.commission_percent !== undefined && body.commission_percent !== null && body.commission_percent !== '') {
     overridePct = Number(body.commission_percent);
     if (!Number.isFinite(overridePct) || overridePct < 0 || overridePct > 100) throw bad('نسبة العمولة يجب أن تكون بين 0 و 100', { commission_percent: 'غير صالح' });
   }
-  const override = overridePct === null ? null : Math.round((amount * overridePct) / 100);
+
+  // نفس الطلب أُرسل مرتين (ضغط مزدوج أو إعادة إرسال): نعيد العملية المسجلة بدلاً من تكرارها
+  if (clientRef) {
+    const dup = one('SELECT id, ref, commission FROM transfers WHERE client_ref = ?', clientRef);
+    if (dup) return res.status(200).json({ id: dup.id, ref: dup.ref, commission: toMajor(dup.commission), duplicate: true });
+  }
 
   const result = tx(() => {
-    const acc = one('SELECT * FROM accounts WHERE id = ?', accountId);
-    if (!acc) throw bad('الحساب المحدد غير موجود', { account_id: 'غير موجود' });
-    if (!acc.active) throw bad('الحساب المحدد موقوف', { account_id: 'موقوف' });
-    if (acc.service !== service) throw bad('الحساب المحدد لا يتبع الخدمة المختارة', { account_id: 'غير متوافق' });
+    let acc = null;
+    if (usesAccount) {
+      acc = one('SELECT * FROM accounts WHERE id = ?', accountId);
+      if (!acc) throw bad('الحساب المحدد غير موجود', { account_id: 'غير موجود' });
+      if (!acc.active) throw bad('الحساب المحدد موقوف', { account_id: 'موقوف' });
+      if (acc.service !== service) throw bad('الحساب المحدد لا يتبع الخدمة المختارة', { account_id: 'غير متوافق' });
+    }
     if (customerId && !one('SELECT id FROM customers WHERE id = ?', customerId)) throw bad('العميل المحدد غير موجود', { customer_id: 'غير موجود' });
 
-    if (getSettings().enforce_account_limits) {
-      const u = accountUsage(acc.id);
-      if (acc.daily_limit !== null && u.daily_used + amount > acc.daily_limit) {
-        throw bad(`المبلغ يتجاوز الحد اليومي للحساب. المتبقي اليوم: ${toMajor(Math.max(0, acc.daily_limit - u.daily_used)).toLocaleString('ar-EG')} ج.م`, { amount: 'يتجاوز الحد اليومي' });
+    if (acc) {
+      const rule = serviceRule(service);
+      const counted = (direction === 'send' && rule.count_send) || (direction === 'receive' && rule.count_receive);
+      if (settings.enforce_account_limits && counted) {
+        const lim = effectiveLimits(acc, rule);
+        const u = usage(acc.id, rule);
+        if (lim.daily_limit !== null && u.daily_used + amount > lim.daily_limit) {
+          throw bad(`المبلغ يتجاوز الحد اليومي للحساب. المتبقي اليوم: ${fmtAmount(Math.max(0, lim.daily_limit - u.daily_used))}`, { amount: 'يتجاوز الحد اليومي' });
+        }
+        if (lim.monthly_limit !== null && u.monthly_used + amount > lim.monthly_limit) {
+          throw bad(`المبلغ يتجاوز الحد الشهري للحساب. المتبقي هذا الشهر: ${fmtAmount(Math.max(0, lim.monthly_limit - u.monthly_used))}`, { amount: 'يتجاوز الحد الشهري' });
+        }
       }
-      if (acc.monthly_limit !== null && u.monthly_used + amount > acc.monthly_limit) {
-        throw bad(`المبلغ يتجاوز الحد الشهري للحساب. المتبقي هذا الشهر: ${toMajor(Math.max(0, acc.monthly_limit - u.monthly_used)).toLocaleString('ar-EG')} ج.م`, { amount: 'يتجاوز الحد الشهري' });
+      // لا يمكن التحويل من حساب بمبلغ أكبر من رصيده المحسوب (عند تحديد رصيده الافتتاحي)
+      if (direction === 'send' && status === 'completed' && settings.enforce_account_balance !== false) {
+        const b = balanceOf(acc);
+        if (b.balance !== null && amount > b.balance) {
+          throw bad(`رصيد الحساب في النظام غير كافٍ. الرصيد الحالي: ${fmtAmount(b.balance)}`, { amount: 'أكبر من الرصيد' });
+        }
       }
     }
-    const rule = findRule(service, direction, amount);
-    const commission = override !== null ? override : calcCommission(rule, amount);
+    const rule = overridePct === null ? findRule(service, direction, amount) : null;
+    const commission = overridePct !== null ? Math.round((amount * overridePct) / 100) : calcCommission(rule, amount);
+    // نحفظ النسبة المطبقة مع العملية حتى لا تتأثر بتعديل القواعد لاحقاً
+    const rate = overridePct !== null ? overridePct : rule ? (rule.calc_type === 'percent' ? rule.value : null) : 0;
+    const source = overridePct !== null ? 'manual' : rule ? 'rule' : 'none';
     const receipt = body.receipt ? saveDataUrl(body.receipt, 'الإيصال') : null;
     const tmpRef = `tmp-${Date.now()}-${Math.random()}`;
-    const rr = run(`INSERT INTO transfers (ref, service, direction, account_id, amount, commission, recipient, customer_id, notes, receipt, status, user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tmpRef, service, direction, accountId, amount, commission, recipient, customerId, notes, receipt, status, req.user.id);
+    const rr = run(`INSERT INTO transfers (ref, service, direction, account_id, amount, commission, recipient, customer_id, notes, receipt, status, user_id,
+      commission_rate, commission_rule_id, commission_source, client_ref)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tmpRef, service, direction, accountId, amount, commission, recipient, customerId, notes, receipt, status,
+    req.user.id, rate, rule?.id ?? null, source, clientRef);
     const id = Number(rr.lastInsertRowid);
-    const ref = `${getSettings().transfer_prefix || 'TR'}-${String(id).padStart(6, '0')}`;
+    const ref = `${settings.transfer_prefix || 'TR'}-${String(id).padStart(6, '0')}`;
     run('UPDATE transfers SET ref = ? WHERE id = ?', ref, id);
-    return { id, ref, commission, commissionSource: override !== null ? 'manual' : rule ? 'rule' : 'none' };
+    return { id, ref, commission, rate, source };
   });
-  audit(req, 'create', 'transfer', result.id, { ref: result.ref, service, direction, amount: toMajor(amount), commission: toMajor(result.commission), source: result.commissionSource, manualPercent: overridePct });
-  res.status(201).json({ id: result.id, ref: result.ref, commission: toMajor(result.commission) });
+  audit(req, 'create', 'transfer', result.id, { ref: result.ref, service, direction, account_id: accountId, amount: toMajor(amount), commission: toMajor(result.commission), rate: result.rate, source: result.source });
+  res.status(201).json({ id: result.id, ref: result.ref, commission: toMajor(result.commission), commission_rate: result.rate });
 }));
 
 r.patch('/transfers/:id/status', requirePerm('transfers.manage'), asyncRoute((req, res) => {

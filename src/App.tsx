@@ -8,7 +8,9 @@ import { NotFoundPage, NotificationsProvider, RequireAuth, RequirePerm } from '.
 import { LoginPage, SetupPage } from './pages/Login';
 import { HomePage } from './pages/Home';
 import { NewTransferPage, ServicePage, TransferDetailPage, TransfersPage, WalletsPage } from './pages/Transfers';
-import { AccountDetailPage, AccountsPage, CommissionsPage } from './pages/Accounts';
+import { AccountDetailPage, AccountsPage, CommissionsPage, RulesPage } from './pages/Accounts';
+import { BalanceDetailPage, BalancesPage } from './pages/Balances';
+import { ShiftDetailPage, ShiftsPage } from './pages/Shifts';
 import { POSPage, SaleDetailPage, SalesPage } from './pages/Sales';
 import { NewPurchasePage, ProductDetailPage, ProductsPage, PurchaseDetailPage, PurchasesPage, StockPage } from './pages/Inventory';
 import {
@@ -57,13 +59,18 @@ export default function App() {
               <Route path="/" element={<RequireAuth><HomePage /></RequireAuth>} />
               <Route path="/notifications" element={<RequireAuth><NotificationsPage /></RequireAuth>} />
 
-              <Route path="/wallets" element={P(['transfers.view', 'accounts.view'], <WalletsPage />)} />
+              <Route path="/wallets" element={P(['transfers.view', 'accounts.view', 'balances.view'], <WalletsPage />)} />
               <Route path="/services/:slug" element={P(['transfers.view', 'transfers.create'], <ServicePage />)} />
               <Route path="/transfers" element={P(['transfers.view', 'transfers.create'], <TransfersPage />)} />
               <Route path="/transfers/new" element={P(['transfers.create'], <NewTransferPage />)} />
               <Route path="/transfers/:id" element={P(['transfers.view'], <TransferDetailPage />)} />
               <Route path="/accounts" element={P(['accounts.view'], <AccountsPage />)} />
               <Route path="/accounts/:id" element={P(['accounts.view'], <AccountDetailPage />)} />
+              <Route path="/balances" element={P(['balances.view'], <BalancesPage />)} />
+              <Route path="/balances/:id" element={P(['balances.view'], <BalanceDetailPage />)} />
+              <Route path="/rules" element={P(['rules.view'], <RulesPage />)} />
+              <Route path="/shifts" element={P(['shifts.view', 'shifts.operate'], <ShiftsPage />)} />
+              <Route path="/shifts/:id" element={P(['shifts.view', 'shifts.operate'], <ShiftDetailPage />)} />
               <Route path="/commissions" element={P(['commissions.view'], <CommissionsPage />)} />
 
               <Route path="/pos" element={P(['pos.use'], <POSPage />)} />
