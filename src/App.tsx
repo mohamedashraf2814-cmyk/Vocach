@@ -46,8 +46,10 @@ function DemoBanner() {
 
 // مسار محمي: يتطلب تسجيل الدخول وأي صلاحية من القائمة، وتفعيل الشيفت قبل العمل
 const P = (perms: string[], el: ReactNode) => <RequireAuth><RequirePerm perms={perms}><ShiftGate>{el}</ShiftGate></RequirePerm></RequireAuth>;
-// شاشات الإدارة والورديات متاحة بدون شيفت مفتوح
+// شاشة الورديات فقط متاحة بدون شيفت مفتوح (لتفعيله أو تأكيد استلامه)
 const A = (perms: string[], el: ReactNode) => <RequireAuth><RequirePerm perms={perms}>{el}</RequirePerm></RequireAuth>;
+// كل الشاشات الأخرى، بما فيها الرئيسية، تتطلب فتح الشيفت أولاً
+const G = (el: ReactNode) => <RequireAuth><ShiftGate>{el}</ShiftGate></RequireAuth>;
 
 export default function App() {
   return (
@@ -60,8 +62,8 @@ export default function App() {
             <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route path="/setup" element={<SetupPage />} />
-              <Route path="/" element={<RequireAuth><HomePage /></RequireAuth>} />
-              <Route path="/notifications" element={<RequireAuth><NotificationsPage /></RequireAuth>} />
+              <Route path="/" element={G(<HomePage />)} />
+              <Route path="/notifications" element={G(<NotificationsPage />)} />
 
               <Route path="/wallets" element={P(['transfers.view', 'accounts.view', 'balances.view'], <WalletsPage />)} />
               <Route path="/services/:slug" element={P(['transfers.view', 'transfers.create'], <ServicePage />)} />
@@ -96,11 +98,11 @@ export default function App() {
 
               <Route path="/reports" element={P(['reports.view'], <ReportsPage />)} />
               <Route path="/reports/:type" element={P(['reports.view'], <ReportPage />)} />
-              <Route path="/users" element={A(['users.manage'], <UsersPage />)} />
-              <Route path="/audit" element={A(['audit.view'], <AuditPage />)} />
-              <Route path="/settings" element={A(['settings.manage'], <SettingsPage />)} />
+              <Route path="/users" element={P(['users.manage'], <UsersPage />)} />
+              <Route path="/audit" element={P(['audit.view'], <AuditPage />)} />
+              <Route path="/settings" element={P(['settings.manage'], <SettingsPage />)} />
 
-              <Route path="*" element={<RequireAuth><NotFoundPage /></RequireAuth>} />
+              <Route path="*" element={G(<NotFoundPage />)} />
             </Routes>
           </ShiftProvider>
           </NotificationsProvider>

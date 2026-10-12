@@ -459,3 +459,4 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .secure-lock svg { width: 16px; height: 16px; }
 .tile { position: relative; }
 .shift-gate { border: 2px solid #fdba74; background: #fff7ed; }
+.shift-screen { max-width: 640px; margin: 24px auto 0; display: flex; flex-direction: column; gap: 12px; }

@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDateTime } from '../lib/format';
 import { Alert, Loading } from './ui';
-import { Page } from './Layout';
+import { TopBar } from './Layout';
 import { StartShiftInline } from '../pages/Shifts';
 
 export interface ShiftStatus {
@@ -65,10 +65,24 @@ export function ShiftGate({ children }: { children: ReactNode }) {
   if (error) return <>{children}</>;
   if (!status) return <Loading />;
   if (!status.required || status.open) return <>{children}</>;
+  // شاشة كاملة: أول ما يراه الموظف بعد تسجيل الدخول هو فتح الشيفت
+  return <ShiftOpenScreen />;
+}
+
+function ShiftOpenScreen() {
+  const { user } = useAuth();
+  useEffect(() => { document.title = 'فتح الشيفت'; }, []);
   return (
-    <Page title="تفعيل الشيفت">
-      <ShiftRequiredCard />
-    </Page>
+    <>
+      <TopBar title="فتح الشيفت" isHome />
+      <main className="main" id="main">
+        <div className="shift-screen">
+          <h1 style={{ fontSize: 24, fontWeight: 800 }}>مرحباً {user?.fullName}</h1>
+          <p className="muted" style={{ marginTop: 4 }}>ابدأ بفتح الشيفت قبل أي عمل في النظام.</p>
+          <ShiftRequiredCard />
+        </div>
+      </main>
+    </>
   );
 }
 
