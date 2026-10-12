@@ -1,12 +1,13 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeftRight, Percent, Receipt, PackageX, Lock, UserCheck } from 'lucide-react';
+import { ArrowLeftRight, Percent, Receipt, PackageX, Lock } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
 import { useApi } from '../lib/hooks';
-import { fmtDateTime, fmtMoney, fmtNum } from '../lib/format';
+import { fmtMoney, fmtNum } from '../lib/format';
 import { MODULES } from '../lib/constants';
 import { TopBar } from '../components/Layout';
+import { ShiftBanner, ShiftRequiredCard, useShift } from '../components/ShiftGate';
 import { Stat, Empty } from '../components/ui';
 
 interface Summary { date: string; transfers?: { count: number; amount: number; commission: number }; sales?: { count: number; total: number }; lowStock?: number; shift?: { id: number; status: string; opened_at: string; name: string } | null }
@@ -14,6 +15,7 @@ interface Summary { date: string; transfers?: { count: number; amount: number; c
 export function HomePage() {
   const { user, can, businessName } = useAuth();
   const summary = useApi(() => api.get<Summary>('/dashboard'), []);
+  const shift = useShift();
   useEffect(() => { document.title = `الرئيسية — ${businessName || 'فوكاش'}`; }, [businessName]);
   const modules = MODULES.filter((m) => can(...m.perms));
   const s = summary.data;
@@ -29,6 +31,7 @@ export function HomePage() {
           </div>
         </div>
 
+        {shift.status?.required && !shift.status.open ? <div className="mb-2"><ShiftRequiredCard /></div> : <ShiftBanner />}
         {s && (s.transfers || s.sales || s.lowStock !== undefined) && (
           <section className="stats mb-2" aria-label="ملخص اليوم">
             {s.transfers && <Stat icon={<ArrowLeftRight />} tone="indigo" label="تحويلات اليوم" value={fmtNum(s.transfers.count)} hint={fmtMoney(s.transfers.amount)} />}
@@ -40,12 +43,6 @@ export function HomePage() {
               </Link>
             )}
           </section>
-        )}
-        {s && s.shift !== undefined && (
-          <Link to="/shifts" className={`alert ${s.shift ? (s.shift.status === 'open' ? 'alert-success' : 'alert-warning') : 'alert-info'} mb-2`} style={{ textDecoration: 'none' }}>
-            <UserCheck aria-hidden />
-            <div>{!s.shift ? 'لا توجد وردية مفتوحة — اضغط لتفعيل الشيفت' : s.shift.status === 'open' ? `الوردية الحالية: ${s.shift.name} منذ ${fmtDateTime(s.shift.opened_at)}` : `وردية ${s.shift.name} بانتظار تأكيد الاستلام`}</div>
-          </Link>
         )}
         {summary.error && <p className="small muted mb-2">تعذر تحميل ملخص اليوم: {summary.error.message}</p>}
 

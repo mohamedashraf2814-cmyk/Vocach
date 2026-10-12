@@ -1,6 +1,7 @@
 // المصدر الوحيد لحساب أرصدة الحسابات واستخدام الحدود — تستخدمه كل الشاشات والتقارير
 import { all, one } from './db.js';
-import { toMajor } from './util.js';
+import { HttpError, toMajor } from './util.js';
+import { getSettings } from './auth.js';
 
 // قواعد الخدمة: الحدود الافتراضية وأنواع العمليات التي تُحتسب في الحد
 export function serviceRule(service) {
@@ -155,4 +156,15 @@ export function operationsSummary(marks) {
 
 export function nowLocal() {
   return one("SELECT datetime('now','localtime') AS v").v;
+}
+
+// يجب أن تكون هناك وردية مفتوحة قبل تسجيل أي عملية مالية أو مخزنية
+export function openShift() {
+  return one("SELECT s.id, s.opened_by, s.opened_at, u.full_name AS name FROM shifts s LEFT JOIN users u ON u.id = s.opened_by WHERE s.status = 'open' ORDER BY s.id DESC LIMIT 1") || null;
+}
+
+export function requireOpenShift(_req, _res, next) {
+  if (getSettings().require_open_shift === false) return next();
+  if (openShift()) return next();
+  next(new HttpError(409, 'يجب تفعيل الشيفت أولاً قبل تسجيل أي عملية', { shift: 'closed' }));
 }

@@ -344,7 +344,7 @@ export function NotificationsPage() {
 /* ───────── الإعدادات ───────── */
 interface SettingsData {
   business_name?: string; business_phone?: string; business_address?: string; invoice_prefix: string; invoice_footer?: string; transfer_prefix: string;
-  enforce_account_limits: boolean; enforce_account_balance: boolean; secure_unlock_minutes: number; limit_warning_percent: number; allow_negative_stock: boolean; enabled_payment_methods: string[]; session_hours: number;
+  enforce_account_limits: boolean; enforce_account_balance: boolean; require_open_shift: boolean; secure_unlock_minutes: number; limit_warning_percent: number; allow_negative_stock: boolean; enabled_payment_methods: string[]; session_hours: number;
 }
 
 export function SettingsPage() {
@@ -358,7 +358,7 @@ export function SettingsPage() {
     if (!f) return;
     const r = await s.run(() => api.put<SettingsData>('/settings', {
       business_name: f.business_name || '', business_phone: f.business_phone || '', business_address: f.business_address || '', invoice_prefix: f.invoice_prefix,
-      invoice_footer: f.invoice_footer || '', transfer_prefix: f.transfer_prefix, enforce_account_limits: f.enforce_account_limits, enforce_account_balance: f.enforce_account_balance, secure_unlock_minutes: Number(f.secure_unlock_minutes), limit_warning_percent: Number(f.limit_warning_percent),
+      invoice_footer: f.invoice_footer || '', transfer_prefix: f.transfer_prefix, enforce_account_limits: f.enforce_account_limits, enforce_account_balance: f.enforce_account_balance, require_open_shift: f.require_open_shift, secure_unlock_minutes: Number(f.secure_unlock_minutes), limit_warning_percent: Number(f.limit_warning_percent),
       allow_negative_stock: f.allow_negative_stock, enabled_payment_methods: f.enabled_payment_methods, session_hours: Number(f.session_hours),
     }));
     if (r) { setF(r); setBusinessName(r.business_name || null); toast('تم حفظ الإعدادات'); }
@@ -401,6 +401,7 @@ export function SettingsPage() {
               <div className="grid-2">
                 <label className="check span-2"><input type="checkbox" checked={v.enforce_account_limits} onChange={(e) => setF({ ...v, enforce_account_limits: e.target.checked })} />منع تسجيل العمليات التي تتجاوز الحد اليومي أو الشهري للحساب</label>
                 <label className="check span-2"><input type="checkbox" checked={v.enforce_account_balance} onChange={(e) => setF({ ...v, enforce_account_balance: e.target.checked })} />منع التحويل من حساب بمبلغ أكبر من رصيده في النظام (للحسابات المحدد لها رصيد افتتاحي)</label>
+                <label className="check span-2"><input type="checkbox" checked={v.require_open_shift} onChange={(e) => setF({ ...v, require_open_shift: e.target.checked })} />إلزام تفعيل الشيفت قبل تسجيل أي عملية أو بيع أو مصروف</label>
                 <Input label="نسبة التنبيه عند الاقتراب من الحد (%)" type="number" min={1} max={100} dir="ltr" value={v.limit_warning_percent} error={s.fieldErrors.limit_warning_percent} onChange={(e) => setF({ ...v, limit_warning_percent: Number(e.target.value) })} />
               </div>
               <p className="small muted mt-1">نسب العمولة في <Link to="/commissions">العمولات</Link>، وحدود الخدمات في <Link to="/rules">القواعد والحدود</Link>، والأرصدة في <Link to="/balances">الرصيد الحالي</Link>.</p>

@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { all, one, run, tx } from '../db.js';
 import { asyncRoute, audit, bad, HttpError, int, money, notFound, paging, str, toMajor } from '../util.js';
-import { can, requirePerm } from '../auth.js';
-import { accountView, cashFlow, currentMarks, nowLocal, operationsSummary } from '../ledger.js';
+import { can, getSettings, requirePerm } from '../auth.js';
+import { accountView, cashFlow, currentMarks, nowLocal, openShift, operationsSummary } from '../ledger.js';
 
 const r = Router();
 
@@ -56,6 +56,14 @@ function mapShift(s) {
   }
   return out;
 }
+
+// حالة الوردية المختصرة لكل المستخدمين (لقفل الشاشات حتى تفعيل الشيفت)
+r.get('/shifts/status', (_req, res) => {
+  const open = openShift();
+  const pending = one(`SELECT s.id, s.handover_to, u.full_name AS name FROM shifts s LEFT JOIN users u ON u.id = s.opened_by
+    WHERE s.status = 'pending_handover' ORDER BY s.id DESC LIMIT 1`);
+  res.json({ required: getSettings().require_open_shift !== false, open, pending: pending || null });
+});
 
 r.get('/shifts/users', requirePerm('shifts.operate', 'shifts.manage'), (_req, res) => {
   res.json(all('SELECT id, full_name, username FROM users WHERE active = 1 ORDER BY full_name'));

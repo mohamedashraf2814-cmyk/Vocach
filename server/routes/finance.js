@@ -6,7 +6,7 @@ import {
 } from '../util.js';
 import { can, requirePerm, requireSecure, getSettings } from '../auth.js';
 import { ADJUSTMENT_TYPES, DIRECTIONS, SERVICES, TRANSFER_STATUSES } from '../constants.js';
-import { accountView, balanceOf, effectiveLimits, ledger, nowLocal, serviceRule, usage } from '../ledger.js';
+import { requireOpenShift, accountView, balanceOf, effectiveLimits, ledger, nowLocal, serviceRule, usage } from '../ledger.js';
 
 const r = Router();
 
@@ -117,7 +117,7 @@ r.put('/accounts/:id/opening-balance', requirePerm('balances.manage'), asyncRout
 }));
 
 // حركات رصيد يدوية: تغذية الحساب، سحب منه، أو تصحيح بعد مطابقة الرصيد الفعلي
-r.post('/accounts/:id/adjustments', requirePerm('balances.manage'), asyncRoute((req, res) => {
+r.post('/accounts/:id/adjustments', requirePerm('balances.manage'), requireOpenShift, asyncRoute((req, res) => {
   const id = Number(req.params.id);
   const acc = one('SELECT * FROM accounts WHERE id = ?', id);
   if (!acc) throw notFound('الحساب غير موجود');
@@ -274,7 +274,7 @@ r.get('/transfers/:id', requirePerm('transfers.view'), asyncRoute((req, res) => 
   res.json(mapMoney(t, TRANSFER_MONEY));
 }));
 
-r.post('/transfers', requirePerm('transfers.create'), asyncRoute((req, res) => {
+r.post('/transfers', requirePerm('transfers.create'), requireOpenShift, asyncRoute((req, res) => {
   const body = req.body || {};
   const settings = getSettings();
   const service = oneOf(body, 'service', SERVICES, { label: 'نوع الخدمة' });
@@ -354,7 +354,7 @@ r.post('/transfers', requirePerm('transfers.create'), asyncRoute((req, res) => {
   res.status(201).json({ id: result.id, ref: result.ref, commission: toMajor(result.commission), commission_rate: result.rate });
 }));
 
-r.patch('/transfers/:id/status', requirePerm('transfers.manage'), asyncRoute((req, res) => {
+r.patch('/transfers/:id/status', requirePerm('transfers.manage'), requireOpenShift, asyncRoute((req, res) => {
   const id = Number(req.params.id);
   const status = oneOf(req.body, 'status', TRANSFER_STATUSES, { label: 'الحالة' });
   const t = one('SELECT id, status, ref FROM transfers WHERE id = ?', id);

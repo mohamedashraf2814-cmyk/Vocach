@@ -5,6 +5,7 @@ import { IS_DEMO } from './lib/env';
 import { AuthProvider } from './lib/auth';
 import { Button, ConfirmDialog, ToastProvider } from './components/ui';
 import { NotFoundPage, NotificationsProvider, RequireAuth, RequirePerm } from './components/Layout';
+import { ShiftGate, ShiftProvider } from './components/ShiftGate';
 import { LoginPage, SetupPage } from './pages/Login';
 import { HomePage } from './pages/Home';
 import { NewTransferPage, ServicePage, TransferDetailPage, TransfersPage, WalletsPage } from './pages/Transfers';
@@ -43,8 +44,10 @@ function DemoBanner() {
   );
 }
 
-// مسار محمي: يتطلب تسجيل الدخول وأي صلاحية من القائمة
-const P = (perms: string[], el: ReactNode) => <RequireAuth><RequirePerm perms={perms}>{el}</RequirePerm></RequireAuth>;
+// مسار محمي: يتطلب تسجيل الدخول وأي صلاحية من القائمة، وتفعيل الشيفت قبل العمل
+const P = (perms: string[], el: ReactNode) => <RequireAuth><RequirePerm perms={perms}><ShiftGate>{el}</ShiftGate></RequirePerm></RequireAuth>;
+// شاشات الإدارة والورديات متاحة بدون شيفت مفتوح
+const A = (perms: string[], el: ReactNode) => <RequireAuth><RequirePerm perms={perms}>{el}</RequirePerm></RequireAuth>;
 
 export default function App() {
   return (
@@ -52,6 +55,7 @@ export default function App() {
       <AuthProvider>
         <ToastProvider>
           <NotificationsProvider>
+          <ShiftProvider>
             <DemoBanner />
             <Routes>
               <Route path="/login" element={<LoginPage />} />
@@ -69,8 +73,8 @@ export default function App() {
               <Route path="/balances" element={P(['balances.view'], <BalancesPage />)} />
               <Route path="/balances/:id" element={P(['balances.view'], <BalanceDetailPage />)} />
               <Route path="/rules" element={P(['rules.view'], <RulesPage />)} />
-              <Route path="/shifts" element={P(['shifts.view', 'shifts.operate'], <ShiftsPage />)} />
-              <Route path="/shifts/:id" element={P(['shifts.view', 'shifts.operate'], <ShiftDetailPage />)} />
+              <Route path="/shifts" element={A(['shifts.view', 'shifts.operate'], <ShiftsPage />)} />
+              <Route path="/shifts/:id" element={A(['shifts.view', 'shifts.operate'], <ShiftDetailPage />)} />
               <Route path="/commissions" element={P(['commissions.view'], <CommissionsPage />)} />
 
               <Route path="/pos" element={P(['pos.use'], <POSPage />)} />
@@ -92,12 +96,13 @@ export default function App() {
 
               <Route path="/reports" element={P(['reports.view'], <ReportsPage />)} />
               <Route path="/reports/:type" element={P(['reports.view'], <ReportPage />)} />
-              <Route path="/users" element={P(['users.manage'], <UsersPage />)} />
-              <Route path="/audit" element={P(['audit.view'], <AuditPage />)} />
-              <Route path="/settings" element={P(['settings.manage'], <SettingsPage />)} />
+              <Route path="/users" element={A(['users.manage'], <UsersPage />)} />
+              <Route path="/audit" element={A(['audit.view'], <AuditPage />)} />
+              <Route path="/settings" element={A(['settings.manage'], <SettingsPage />)} />
 
               <Route path="*" element={<RequireAuth><NotFoundPage /></RequireAuth>} />
             </Routes>
+          </ShiftProvider>
           </NotificationsProvider>
         </ToastProvider>
       </AuthProvider>

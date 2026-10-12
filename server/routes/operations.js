@@ -6,7 +6,7 @@ import {
   asyncRoute, audit, bad, fmtAmount, mapMoney, money, notFound, paging, saveDataUrl, removeUpload, str, toMajor, isDate, today, likeParam, HttpError,
 } from '../util.js';
 import { can, requirePerm, getSettings } from '../auth.js';
-import { accountView, cashFlow } from '../ledger.js';
+import { accountView, cashFlow, requireOpenShift } from '../ledger.js';
 
 const r = Router();
 
@@ -50,7 +50,7 @@ function expenseBody(body) {
   };
 }
 
-r.post('/expenses', requirePerm('expenses.manage'), asyncRoute((req, res) => {
+r.post('/expenses', requirePerm('expenses.manage'), requireOpenShift, asyncRoute((req, res) => {
   const b = expenseBody(req.body);
   const attachment = req.body.attachment ? saveDataUrl(req.body.attachment, 'المرفق') : null;
   const rr = run('INSERT INTO expenses (category, amount, date, description, attachment, user_id) VALUES (?, ?, ?, ?, ?, ?)',
@@ -64,7 +64,7 @@ function assertNotSettled(date) {
   if (s && s.status === 'approved') throw bad('لا يمكن تعديل مصروفات يوم تم اعتماد تقفيلته');
 }
 
-r.put('/expenses/:id', requirePerm('expenses.manage'), asyncRoute((req, res) => {
+r.put('/expenses/:id', requirePerm('expenses.manage'), requireOpenShift, asyncRoute((req, res) => {
   const id = Number(req.params.id);
   const cur = one('SELECT * FROM expenses WHERE id = ?', id);
   if (!cur) throw notFound('المصروف غير موجود');
@@ -80,7 +80,7 @@ r.put('/expenses/:id', requirePerm('expenses.manage'), asyncRoute((req, res) => 
   res.json({ ok: true });
 }));
 
-r.delete('/expenses/:id', requirePerm('expenses.manage'), asyncRoute((req, res) => {
+r.delete('/expenses/:id', requirePerm('expenses.manage'), requireOpenShift, asyncRoute((req, res) => {
   const id = Number(req.params.id);
   const cur = one('SELECT * FROM expenses WHERE id = ?', id);
   if (!cur) throw notFound('المصروف غير موجود');

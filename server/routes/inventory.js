@@ -6,6 +6,7 @@ import {
 } from '../util.js';
 import { can, requirePerm, getSettings } from '../auth.js';
 import { MANUAL_MOVEMENT_TYPES, PAYMENT_METHODS } from '../constants.js';
+import { requireOpenShift } from '../ledger.js';
 
 const r = Router();
 
@@ -167,7 +168,7 @@ r.get('/stock/movements', requirePerm('stock.view'), (req, res) => {
   res.json({ items, total, page, pageSize });
 });
 
-r.post('/stock/movements', requirePerm('stock.adjust'), asyncRoute((req, res) => {
+r.post('/stock/movements', requirePerm('stock.adjust'), requireOpenShift, asyncRoute((req, res) => {
   const productId = int(req.body, 'product_id', { required: true, min: 1, label: 'المنتج' });
   const type = oneOf(req.body, 'type', MANUAL_MOVEMENT_TYPES, { label: 'نوع الحركة' });
   const note = str(req.body, 'note', { max: 300, label: 'ملاحظات' });
@@ -214,7 +215,7 @@ r.get('/purchases/:id', requirePerm('purchases.view'), asyncRoute((req, res) => 
   res.json({ ...mapMoney(p, ['total']), items });
 }));
 
-r.post('/purchases', requirePerm('purchases.create'), asyncRoute((req, res) => {
+r.post('/purchases', requirePerm('purchases.create'), requireOpenShift, asyncRoute((req, res) => {
   const supplier = str(req.body, 'supplier', { max: 120, label: 'المورد' });
   const invoiceNo = str(req.body, 'invoice_no', { max: 60, label: 'رقم فاتورة المورد' });
   const notes = str(req.body, 'notes', { max: 500, label: 'ملاحظات' });
@@ -275,7 +276,7 @@ r.get('/sales/:id', requirePerm('sales.view', 'pos.use'), asyncRoute((req, res) 
   res.json({ ...mapMoney(s, SALE_MONEY), items });
 }));
 
-r.post('/sales', requirePerm('pos.use'), asyncRoute((req, res) => {
+r.post('/sales', requirePerm('pos.use'), requireOpenShift, asyncRoute((req, res) => {
   const settings = getSettings();
   const enabled = Array.isArray(settings.enabled_payment_methods) ? settings.enabled_payment_methods : ['cash'];
   const method = oneOf(req.body, 'payment_method', PAYMENT_METHODS, { label: 'طريقة الدفع' });
@@ -329,7 +330,7 @@ r.post('/sales', requirePerm('pos.use'), asyncRoute((req, res) => {
   });
 }));
 
-r.post('/sales/:id/cancel', requirePerm('sales.cancel'), asyncRoute((req, res) => {
+r.post('/sales/:id/cancel', requirePerm('sales.cancel'), requireOpenShift, asyncRoute((req, res) => {
   const id = Number(req.params.id);
   const reason = str(req.body, 'reason', { required: true, max: 300, label: 'سبب الإلغاء' });
   const s = tx(() => {

@@ -7,6 +7,7 @@ import { useApi, useSubmit } from '../lib/hooks';
 import { fmtDateTime, fmtMoney, fmtNum, round2 } from '../lib/format';
 import { DIRECTIONS, SERVICES, SHIFT_STATUS, type Direction, type Service } from '../lib/constants';
 import { Page, useNotifications } from '../components/Layout';
+import { useShift } from '../components/ShiftGate';
 import {
   Alert, AsyncView, Badge, Button, Card, DataTable, Empty, KV, Modal, MoneyInput, Pagination, Select, StatusBadge, Textarea, useToast,
 } from '../components/ui';
@@ -119,7 +120,8 @@ export function ShiftsPage() {
   const history = useApi(() => (can('shifts.view') ? api.get<{ items: Shift[]; total: number; page: number; pageSize: number }>('/shifts', { page }) : Promise.resolve(null)), [page]);
   const [closeOpen, setCloseOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const reload = () => { current.reload(); history.reload(); };
+  const { refresh: refreshShift } = useShift();
+  const reload = () => { current.reload(); history.reload(); refreshShift(); };
 
   return (
     <Page title="تفعيل الشيفت" icon={<UserCheck />} tone="orange" subtitle="بدء الوردية وتسليمها واستلامها بين الموظفين">
@@ -196,21 +198,30 @@ function StartShiftCard({ suggested, onStarted }: { suggested: number | null; on
   );
 }
 
-function StartShiftInline({ suggested, onStarted }: { suggested: number | null; onStarted: () => void }) {
+export function StartShiftInline({ suggested, onStarted, loadSuggestion }: { suggested: number | null; onStarted: () => void; loadSuggestion?: boolean }) {
   const [cash, setCash] = useState(suggested === null ? '' : String(suggested));
+  const [hint, setHint] = useState<number | null>(suggested);
+  const { refresh: refreshShift } = useShift();
+  // اقتراح نقدية البداية من آخر وردية مسلّمة
+  useEffect(() => {
+    if (!loadSuggestion) return;
+    api.get<Current>('/shifts/current').then((c) => {
+      if (c.suggested_opening_cash !== null) { setHint(c.suggested_opening_cash); setCash((v) => (v === '' ? String(c.suggested_opening_cash) : v)); }
+    }).catch(() => {});
+  }, [loadSuggestion]);
   const [note, setNote] = useState('');
   const s = useSubmit();
   const toast = useToast();
   const { refresh } = useNotifications();
   const start = async () => {
     const r = await s.run(() => api.post('/shifts/start', { opening_cash: cash === '' ? '' : Number(cash), note: note || null }));
-    if (r) { toast('تم بدء الوردية'); refresh(); onStarted(); }
+    if (r) { toast('تم تفعيل الشيفت'); refresh(); refreshShift(); onStarted(); }
   };
   return (
     <form className="stack mt-1" onSubmit={(e) => { e.preventDefault(); start(); }} noValidate>
       <div className="grid-2">
         <MoneyInput label="النقدية الافتتاحية في الدرج (ج.م)" required value={cash} error={s.fieldErrors.opening_cash}
-          hint={suggested !== null ? `آخر نقدية مسلّمة: ${fmtMoney(suggested)}` : 'أدخل المبلغ بعد العد'} onChange={(e) => setCash(e.target.value)} />
+          hint={hint !== null ? `آخر نقدية مسلّمة: ${fmtMoney(hint)}` : 'أدخل المبلغ بعد العد'} onChange={(e) => setCash(e.target.value)} />
         <Textarea label="ملاحظات" value={note} onChange={(e) => setNote(e.target.value)} />
       </div>
       {s.error && <Alert>{s.error}</Alert>}

@@ -458,3 +458,4 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .secure-lock { position: absolute; top: 10px; inset-inline-start: 10px; color: var(--text-3); }
 .secure-lock svg { width: 16px; height: 16px; }
 .tile { position: relative; }
+.shift-gate { border: 2px solid #fdba74; background: #fff7ed; }
